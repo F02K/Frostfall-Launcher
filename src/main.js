@@ -1,3 +1,9 @@
+// Load .env before anything else — only in unpackaged (dev/local) builds.
+// Packaged installers use real environment variables set by the OS / process manager.
+if (!require('electron').app.isPackaged) {
+  require('dotenv').config()
+}
+
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
 const path   = require('path')
 const fs     = require('fs')

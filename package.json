@@ -14,7 +14,8 @@
     "build:mac": "electron-builder --mac"
   },
   "dependencies": {
-    "adm-zip":       "^0.5.10",
+    "adm-zip":        "^0.5.10",
+    "dotenv":         "^16.4.5",
     "electron-store": "^8.2.0"
   },
   "devDependencies": {
