@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"const m = require\\('./routes/manifest'\\); console.log\\(m\\)\")",
+      "Bash(node --check scripts/merge-files.js)",
+      "Bash(node --check scripts/setup-client.js)",
+      "Bash(node --check routes/webhook.js)",
+      "Bash(node --check server.js)",
+      "Bash(find:*)",
+      "Bash(grep -E '\\\\.\\(js|json|md|env|config\\)$')",
+      "Bash(grep -E '\\\\.\\(env|json|js|md\\)$')",
+      "Bash(node --check \"E:/Github/Frostfall-Server/scripts/generate-settings.js\")",
+      "Bash(node --check \"E:/Github/Frostfall-Backend/config.js\")",
+      "Bash(node --check config.js)",
+      "Bash(node --check routes/serverinfo.js)",
+      "Bash(node --check routes/discord-auth.js)",
+      "Bash(node --check routes/metrics.js)",
+      "Bash(node --check routes/servers.js)"
+    ]
+  }
+}

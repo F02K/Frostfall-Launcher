@@ -64,12 +64,30 @@
         <span class="sinfo-item sinfo-discord" id="sinfo-discord" hidden>&#128481; Discord login required</span>
       </div>
 
-      <div class="section-header">
-        <h2 class="section-title">LATEST NEWS</h2>
-      </div>
+      <!-- ── Two-column content layout ─────────────── -->
+      <div class="content-layout">
 
-      <div class="news-grid" id="news-grid">
-        <!-- populated by renderer.js -->
+        <!-- News -->
+        <section class="news-section">
+          <div class="section-header">
+            <h2 class="section-title">LATEST NEWS</h2>
+          </div>
+          <div class="news-grid" id="news-grid">
+            <!-- populated by renderer.js -->
+          </div>
+        </section>
+
+        <!-- Modlist -->
+        <section class="modlist-section">
+          <div class="section-header section-header--modlist">
+            <h2 class="section-title">MODLIST</h2>
+            <span class="modlist-count" id="modlist-count"></span>
+          </div>
+          <div class="modlist-panel" id="modlist">
+            <!-- populated by renderer.js -->
+          </div>
+        </section>
+
       </div>
     </main>
 
@@ -128,6 +146,33 @@
           <div class="discord-auth-row" id="discord-auth-row">
             <!-- populated by renderer.js -->
           </div>
+        </div>
+
+        <!-- Vortex integration -->
+        <div class="settings-group settings-group--vortex">
+          <label class="setting-label">Vortex Mod Manager</label>
+          <div class="vortex-status-row" id="vortex-status-row">
+            <span class="vortex-status-dot" id="vortex-status-dot"></span>
+            <span class="vortex-status-text" id="vortex-status-text">Not configured</span>
+          </div>
+          <div class="setting-path-row">
+            <input class="setting-input" id="setting-vortex-path" type="text"
+                   placeholder="Path to Vortex.exe" />
+            <button class="btn-browse" id="btn-browse-vortex">Browse…</button>
+          </div>
+          <button class="btn-detect-vortex" id="btn-detect-vortex">Auto-detect Vortex</button>
+          <div class="vortex-profile-row">
+            <label class="setting-label-sm">Profile</label>
+            <select class="setting-input setting-select" id="setting-vortex-profile">
+              <option value="">— select profile —</option>
+            </select>
+            <button class="btn-icon" id="btn-refresh-profiles" title="Refresh profile list">&#8635;</button>
+            <button class="btn-icon" id="btn-open-profiles" title="Open profiles folder in Explorer">&#128193;</button>
+          </div>
+          <label class="setting-checkbox-row" id="vortex-enable-row">
+            <input type="checkbox" id="setting-vortex-enabled" />
+            <span>Enable Vortex integration — install &amp; deploy via profile</span>
+          </label>
         </div>
 
         <div class="modal-actions">

@@ -303,6 +303,9 @@ html, body {
 /* ── Section heading ──────────────────────────────── */
 .section-header {
   margin-bottom: 20px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
 }
 
 .section-title {
@@ -315,10 +318,117 @@ html, body {
   text-shadow: 0 1px 8px rgba(0,0,0,0.8);
 }
 
+.modlist-count {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 1.5px;
+  color: rgba(232, 224, 208, 0.28);
+}
+
+/* ── Modlist panel ────────────────────────────────── */
+.modlist-panel {
+  flex: 1;
+  overflow-y: auto;
+  background: rgba(6, 4, 2, 0.48);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  display: flex;
+  flex-direction: column;
+}
+
+.modlist-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(201, 162, 39, 0.07);
+  transition: background 0.15s;
+}
+
+.modlist-item:last-child { border-bottom: none; }
+
+.modlist-item:hover { background: rgba(201, 162, 39, 0.05); }
+
+.mod-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgba(232, 224, 208, 0.15);
+}
+
+.mod-dot--enabled  { background: rgba(100, 190, 100, 0.75); }
+.mod-dot--disabled { background: rgba(232, 224, 208, 0.15); }
+
+.mod-name {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.3px;
+  color: var(--parchment);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.modlist-item--disabled .mod-name {
+  color: rgba(232, 224, 208, 0.35);
+}
+
+.mod-badge {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  padding: 2px 5px;
+  flex-shrink: 0;
+  line-height: 1.4;
+}
+
+.mod-badge--required {
+  background: rgba(201, 162, 39, 0.12);
+  border: 1px solid rgba(201, 162, 39, 0.28);
+  color: rgba(201, 162, 39, 0.75);
+}
+
+.mod-version {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: rgba(232, 224, 208, 0.28);
+  flex-shrink: 0;
+}
+
+/* ── Two-column content layout ────────────────────── */
+.content-layout {
+  display: flex;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+.news-section {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.modlist-section {
+  width: 268px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* ── News grid ────────────────────────────────────── */
 .news-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 14px;
   flex: 1;
 }
@@ -901,6 +1011,116 @@ html, body {
 .setting-select option {
   background: #100a04;
   color: var(--parchment);
+}
+
+/* ── Vortex integration ───────────────────────────── */
+.settings-group--vortex {
+  border-top: 1px solid var(--glass-border);
+  padding-top: 16px;
+}
+
+.vortex-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.vortex-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgba(232, 224, 208, 0.15);
+}
+
+.vortex-status-dot.dot-ok   { background: #6abf5e; }
+.vortex-status-dot.dot-warn { background: #c9a227; }
+
+.vortex-status-text {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: rgba(232, 224, 208, 0.45);
+}
+
+.vortex-profile-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.vortex-profile-row .setting-input { flex: 1; }
+
+.setting-label-sm {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: rgba(201, 162, 39, 0.4);
+  white-space: nowrap;
+}
+
+.btn-icon {
+  width: 34px;
+  height: 34px;
+  background: var(--glass-bg-lt);
+  border: 1px solid var(--glass-border);
+  color: rgba(232, 224, 208, 0.5);
+  font-size: 15px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+
+.btn-icon:hover { border-color: var(--glass-border-bright); color: var(--parchment); }
+
+.btn-detect-vortex {
+  align-self: flex-start;
+  padding: 7px 14px;
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  color: rgba(201, 162, 39, 0.6);
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-top: 4px;
+}
+
+.btn-detect-vortex:hover    { border-color: rgba(201,162,39,0.5); color: var(--gold); }
+.btn-detect-vortex:disabled { opacity: 0.4; cursor: default; }
+
+.setting-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  margin-top: 6px;
+}
+
+.setting-checkbox-row input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--gold);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.setting-checkbox-row span {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: rgba(232, 224, 208, 0.6);
+  user-select: none;
 }
 
 /* ── Scrollbar ────────────────────────────────────── */

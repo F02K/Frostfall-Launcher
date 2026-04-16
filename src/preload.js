@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fetchNews:       () => ipcRenderer.invoke('api:news'),
   fetchServerInfo: () => ipcRenderer.invoke('api:serverinfo'),
   fetchMetrics:    () => ipcRenderer.invoke('api:metrics'),
+  fetchModlist:    () => ipcRenderer.invoke('api:modlist'),
+  fetchServers:    () => ipcRenderer.invoke('api:servers'),
 
   // Discord OAuth
   discordLogin:   () => ipcRenderer.invoke('discord:login'),
@@ -43,4 +45,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('install:progress')
     ipcRenderer.removeAllListeners('install:complete')
   },
+
+  // Vortex integration
+  vortexDetect:        ()                      => ipcRenderer.invoke('vortex:detect'),
+  vortexListProfiles:  ()                      => ipcRenderer.invoke('vortex:listProfiles'),
+  vortexGetStatus:     ()                      => ipcRenderer.invoke('vortex:getStatus'),
+  vortexTagProfile:    (id, name)              => ipcRenderer.invoke('vortex:tagProfile', id, name),
+  vortexOpenProfilesDir: ()                    => ipcRenderer.send('vortex:openProfilesDir'),
 })
