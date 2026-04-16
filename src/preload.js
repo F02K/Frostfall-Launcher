@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fetchNews:       () => ipcRenderer.invoke('api:news'),
   fetchServerInfo: () => ipcRenderer.invoke('api:serverinfo'),
   fetchMetrics:    () => ipcRenderer.invoke('api:metrics'),
+  fetchModlist:    () => ipcRenderer.invoke('api:modlist'),
+  fetchServers:    () => ipcRenderer.invoke('api:servers'),
 
   // Discord OAuth
   discordLogin:   () => ipcRenderer.invoke('discord:login'),

@@ -31,6 +31,7 @@ const store = new Store({
     skyrimPath:        '',
     username:          '',
     activeServerIndex: 0,
+    cachedServers:     [],   // last-known server list fetched from /api/servers
     discordUser:       null,
     discordToken:      null,
     vortexPath:        '',
@@ -46,12 +47,13 @@ function send(channel, ...args) {
 }
 
 // ── Active server helper ──────────────────────────────────────────────────────
+// Returns the currently selected game server from the cached API list,
+// or null if no servers have been fetched yet.
 function activeServer() {
-  const idx = Math.min(
-    store.get('activeServerIndex') || 0,
-    config.servers.length - 1
-  )
-  return config.servers[idx]
+  const servers = store.get('cachedServers') || []
+  if (servers.length === 0) return null
+  const idx = Math.min(store.get('activeServerIndex') || 0, servers.length - 1)
+  return servers[idx]
 }
 
 // ── Window ────────────────────────────────────────────────────────────────────
@@ -98,15 +100,28 @@ ipcMain.on('window:maximize', () => {
 ipcMain.on('window:close', () => win?.close())
 
 // ── Settings ──────────────────────────────────────────────────────────────────
-ipcMain.handle('settings:load', () => ({
-  ...store.store,
-  servers:     config.servers,
-  multiServer: config.servers.length > 1,
-  discordUser: store.get('discordUser') || null,
-}))
+ipcMain.handle('settings:load', async () => {
+  // Refresh the server list from the backend on every load.
+  // On failure we keep the previously cached list so offline launches still work.
+  try {
+    const fetched = await fetchJSON(`${config.apiUrl}/api/servers`)
+    if (Array.isArray(fetched) && fetched.length > 0) {
+      store.set('cachedServers', fetched)
+    }
+  } catch { /* keep existing cache */ }
+
+  const servers = store.get('cachedServers') || []
+  return {
+    ...store.store,
+    servers,
+    multiServer: servers.length > 1,
+    discordUser: store.get('discordUser') || null,
+  }
+})
 ipcMain.handle('settings:save', (_e, data) => {
-  const allowed = ['skyrimPath', 'username', 'activeServerIndex', 'vortexPath', 'vortexProfileId', 'vortexEnabled']
-  const clean   = {}
+  const allowed = ['skyrimPath', 'username', 'activeServerIndex',
+                   'vortexPath', 'vortexProfileId', 'vortexEnabled']
+  const clean = {}
   for (const k of allowed) if (k in data) clean[k] = data[k]
   store.set(clean)
 })
@@ -129,14 +144,14 @@ ipcMain.on('open:external', (_e, url) => {
 
 // ── News ──────────────────────────────────────────────────────────────────────
 ipcMain.handle('api:news', async () => {
-  try { return await fetchJSON(`${activeServer().apiUrl}/api/news`) }
+  try { return await fetchJSON(`${config.apiUrl}/api/news`) }
   catch { return null }
 })
 
 // ── Server status ─────────────────────────────────────────────────────────────
 ipcMain.handle('api:status', async () => {
   try {
-    const data = await fetchJSON(`${activeServer().apiUrl}/api/status`)
+    const data = await fetchJSON(`${config.apiUrl}/api/status`)
     return { ok: true, ...data }
   } catch {
     return { ok: false }
@@ -145,7 +160,7 @@ ipcMain.handle('api:status', async () => {
 
 // ── Server info ───────────────────────────────────────────────────────────────
 ipcMain.handle('api:serverinfo', async () => {
-  try { return await fetchJSON(`${activeServer().apiUrl}/api/serverinfo`) }
+  try { return await fetchJSON(`${config.apiUrl}/api/serverinfo`) }
   catch { return null }
 })
 
@@ -160,12 +175,10 @@ ipcMain.handle('discord:logout', () => {
 })
 
 ipcMain.handle('discord:login', async () => {
-  const srv = activeServer()
-
   // 1. Ask backend for the OAuth URL
   let authUrl
   try {
-    const data = await fetchJSON(`${srv.apiUrl}/auth/discord/url`)
+    const data = await fetchJSON(`${config.apiUrl}/auth/discord/url`)
     authUrl = data.url
   } catch (err) {
     return { success: false, error: `Could not reach backend: ${err.message}` }
@@ -205,7 +218,7 @@ ipcMain.handle('discord:login', async () => {
       }
 
       // 3. Exchange the code via backend (keeps clientSecret server-side)
-      fetchJSON(`${srv.apiUrl}/auth/discord/exchange?code=${encodeURIComponent(code)}`)
+      fetchJSON(`${config.apiUrl}/auth/discord/exchange?code=${encodeURIComponent(code)}`)
         .then(data => {
           if (!data.ok) return resolve({ success: false, error: data.error })
           store.set('discordUser',  data.user)
@@ -256,16 +269,33 @@ ipcMain.on('vortex:openProfilesDir', () => {
 
 // ── Metrics ───────────────────────────────────────────────────────────────────
 ipcMain.handle('api:metrics', async () => {
-  try { return await fetchJSON(`${activeServer().apiUrl}/api/metrics`) }
+  try { return await fetchJSON(`${config.apiUrl}/api/metrics`) }
   catch { return { ok: false, error: 'Backend unreachable' } }
+})
+
+// ── Servers ───────────────────────────────────────────────────────────────────
+ipcMain.handle('api:servers', async () => {
+  try {
+    const servers = await fetchJSON(`${config.apiUrl}/api/servers`)
+    if (Array.isArray(servers) && servers.length > 0) store.set('cachedServers', servers)
+    return servers
+  } catch {
+    return store.get('cachedServers') || []
+  }
+})
+
+// ── Modlist ───────────────────────────────────────────────────────────────────
+ipcMain.handle('api:modlist', async () => {
+  try { return await fetchJSON(`${config.apiUrl}/api/modlist`) }
+  catch { return null }
 })
 
 // ── Launcher update check ─────────────────────────────────────────────────────
 ipcMain.handle('app:checkUpdate', async () => {
   const current = app.getVersion()
   try {
-    const data = await fetchJSON(`${activeServer().apiUrl}/api/version`)
-    const latest   = data.version
+    const data = await fetchJSON(`${config.apiUrl}/api/version`)
+    const latest    = data.version
     const hasUpdate = compareVersions(latest, current) > 0
     return { current, latest, hasUpdate, downloadUrl: data.downloadUrl || '' }
   } catch {
@@ -463,13 +493,11 @@ function runDirectInstall() {
 
     // ── 4. Write server connection config ────────────────────────────────────
     const srv = activeServer()
+    if (!srv) return abort('No server selected — open Settings and choose a server.')
     const settingsDest = path.join(
       skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt'
     )
-    fs.mkdirSync(path.dirname(settingsDest), { recursive: true })
-    fs.writeFileSync(settingsDest,
-      `serverAddress = ${srv.address}\nserverPort = ${srv.port}\n`
-    )
+    writeClientSettings(settingsDest, srv)
 
     // ── 5. Verify SKSE ───────────────────────────────────────────────────────
     const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
@@ -522,13 +550,11 @@ function runVortexInstall(profileId) {
     )
 
     // ── 3. Write server connection config to staging ─────────────────────────
-    const srv         = activeServer()
-    const settingsRel = path.join('Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt')
+    const srv = activeServer()
+    if (!srv) return abort('No server selected — open Settings and choose a server.')
+    const settingsRel  = path.join('Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt')
     const settingsDest = path.join(vortex.getModStagingDir(), settingsRel)
-    fs.mkdirSync(path.dirname(settingsDest), { recursive: true })
-    fs.writeFileSync(settingsDest,
-      `serverAddress = ${srv.address}\nserverPort = ${srv.port}\n`
-    )
+    writeClientSettings(settingsDest, srv)
     log('[vortex-install] settings written to staging')
 
     // ── 4. Enable mod in Vortex profile modlist ──────────────────────────────
@@ -568,6 +594,26 @@ function runVortexInstall(profileId) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Write (or merge into) the SkyMP client settings JSON file.
+ * Only server-ip and server-port are touched — all other keys the user or the
+ * client itself may have set (gameData, master, server-public-keys, …) are
+ * preserved unchanged.
+ */
+function writeClientSettings(destPath, srv) {
+  let settings = {}
+  try {
+    settings = JSON.parse(fs.readFileSync(destPath, 'utf8'))
+  } catch { /* file absent or invalid — start fresh */ }
+
+  settings['server-ip']   = srv.address
+  settings['server-port'] = Number(srv.port)
+
+  fs.mkdirSync(path.dirname(destPath), { recursive: true })
+  fs.writeFileSync(destPath, JSON.stringify(settings, null, 2) + '\n')
+}
+
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
     const mod = url.startsWith('https') ? https : http

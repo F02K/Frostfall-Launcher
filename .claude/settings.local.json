@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"const m = require\\('./routes/manifest'\\); console.log\\(m\\)\")",
+      "Bash(node --check scripts/merge-files.js)",
+      "Bash(node --check scripts/setup-client.js)",
+      "Bash(node --check routes/webhook.js)",
+      "Bash(node --check server.js)",
+      "Bash(find:*)"
+    ]
+  }
+}

@@ -49,9 +49,9 @@ async function loadSettings() {
   fieldSkyrimPath.value = s.skyrimPath || ''
   fieldUsername.value   = s.username   || ''
 
-  // Multi-server selector — only visible when >1 server is configured
-  if (s.multiServer && s.servers && s.servers.length > 1) {
-    const group = document.getElementById('group-server-select')
+  // Server selector — only visible when >1 server is returned by the API
+  const group = document.getElementById('group-server-select')
+  if (s.servers && s.servers.length > 1) {
     group.hidden = false
     fieldServerSelect.innerHTML = ''
     s.servers.forEach((srv, i) => {
@@ -61,6 +61,8 @@ async function loadSettings() {
       opt.selected    = i === (s.activeServerIndex || 0)
       fieldServerSelect.appendChild(opt)
     })
+  } else {
+    group.hidden = true
   }
 
   // Restore Discord user from persisted store
@@ -448,19 +450,14 @@ async function loadNews() {
 
 // ── Modlist ───────────────────────────────────────────────────────────────────
 
-// TODO: replace with window.electronAPI.fetchModlist() once the backend API is ready.
-// Expected shape: { name: string, version: string, required?: boolean, enabled: boolean }[]
-const EXAMPLE_MODLIST = [
-  { name: 'SKSE64',                          version: '2.2.6',   required: true,  enabled: true  },
-  { name: 'SkyMP Client',                    version: '0.8.2',   required: true,  enabled: true  },
-  { name: 'Address Library for SKSE',        version: '11.0.0',  required: true,  enabled: true  },
-  { name: 'SkyUI',                           version: '5.2.1',   required: false, enabled: true  },
-  { name: 'Relationship Dialogue Overhaul',  version: '1.0.4',   required: false, enabled: true  },
-  { name: 'Alternate Start – Live Another Life', version: '4.1.7', required: false, enabled: true  },
-  { name: 'Unofficial Skyrim Special Edition Patch', version: '4.3.0', required: false, enabled: true  },
-  { name: 'Immersive Citizens – AI Overhaul', version: '0.4.1',  required: false, enabled: true  },
-  { name: 'A Quality World Map',             version: '9.0.1',   required: false, enabled: false },
-  { name: 'Enhanced Lights and FX',          version: '3.05',    required: false, enabled: false },
+const FALLBACK_MODLIST = [
+  { name: 'SKSE64',                                  version: '2.2.6',   required: true,  enabled: true  },
+  { name: 'SkyMP Client',                            version: '0.8.2',   required: true,  enabled: true  },
+  { name: 'Address Library for SKSE',                version: '11.0.0',  required: true,  enabled: true  },
+  { name: 'SkyUI',                                   version: '5.2.1',   required: false, enabled: true  },
+  { name: 'Unofficial Skyrim Special Edition Patch', version: '4.3.0',   required: false, enabled: true  },
+  { name: 'A Quality World Map',                     version: '9.0.1',   required: false, enabled: false },
+  { name: 'Enhanced Lights and FX',                  version: '3.05',    required: false, enabled: false },
 ]
 
 function buildModItem(mod) {
@@ -493,13 +490,11 @@ function buildModItem(mod) {
   return item
 }
 
-function loadModlist() {
-  // TODO: swap in API call here, e.g.:
-  //   const items = await window.electronAPI.fetchModlist() ?? EXAMPLE_MODLIST
-  const items = EXAMPLE_MODLIST
-
+async function loadModlist() {
   const panel = document.getElementById('modlist')
   const count = document.getElementById('modlist-count')
+
+  const items = await window.electronAPI.fetchModlist() ?? FALLBACK_MODLIST
 
   panel.innerHTML = ''
   items.forEach(mod => panel.appendChild(buildModItem(mod)))
