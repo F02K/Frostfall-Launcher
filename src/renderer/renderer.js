@@ -265,20 +265,27 @@ document.getElementById('btn-install').addEventListener('click', () => {
   installStatus.textContent = 'Starting install…'
   window.electronAPI.removeInstallListeners()
 
-  window.electronAPI.onInstallProgress(({ file, index, total, skipped }) => {
-    const prefix = skipped ? '[skip]' : `[${index}/${total}]`
-    installStatus.textContent = `${prefix} ${file}`
+  window.electronAPI.onInstallProgress(({ phase, file, index, total, skipped }) => {
+    if (phase === 'download') {
+      installStatus.textContent = file
+    } else if (phase === 'deploy') {
+      installStatus.textContent = `[deploy ${index}/${total}] ${file}`
+    } else {
+      const prefix = skipped ? '[skip]' : `[${index}/${total}]`
+      installStatus.textContent = `${prefix} ${file}`
+    }
   })
 
-  window.electronAPI.onInstallComplete(({ success, error, skseWarning, skipped, total, vortex: usedVortex }) => {
+  window.electronAPI.onInstallComplete(({ success, error, skseWarning, upToDate, vortex: usedVortex }) => {
     if (!success) {
       installStatus.textContent = `Error: ${error}`
     } else if (skseWarning) {
       installStatus.textContent = `Done — ⚠ ${skseWarning}`
+    } else if (upToDate) {
+      installStatus.textContent = 'Already up to date — server settings updated.'
     } else {
-      const note   = skipped > 0 ? ` (${skipped}/${total} unchanged)` : ''
       const prefix = usedVortex ? 'Staged & deployed via Vortex' : 'Install complete'
-      installStatus.textContent = `${prefix}! SKSE ✓${note}`
+      installStatus.textContent = `${prefix}! SKSE ✓`
     }
   })
 

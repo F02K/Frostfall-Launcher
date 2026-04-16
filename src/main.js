@@ -1,11 +1,13 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
 const path   = require('path')
 const fs     = require('fs')
+const os     = require('os')
 const crypto = require('crypto')
 const http   = require('http')
 const https  = require('https')
 const { spawn } = require('child_process')
 const Store  = require('electron-store')
+const AdmZip = require('adm-zip')
 const config = require('./config')
 const vortex = require('./vortex')
 
@@ -32,6 +34,7 @@ const store = new Store({
     username:          '',
     activeServerIndex: 0,
     cachedServers:     [],   // last-known server list fetched from /api/servers
+    filesVersion:      '',   // version tag from last successful file download
     discordUser:       null,
     discordToken:      null,
     vortexPath:        '',
@@ -359,55 +362,6 @@ ipcMain.handle('launch:skse', () => {
 })
 
 // ── Install files ─────────────────────────────────────────────────────────────
-const FILES_ROOT = isDev
-  ? path.join(__dirname, '..', 'backend', 'public', 'files')
-  : path.join(process.resourcesPath, 'files')
-
-const INSTALL_BUCKETS = [
-  { dir: path.join(FILES_ROOT, 'root'), destBase: '' },
-]
-
-function fileSha256(filePath) {
-  try {
-    return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
-  } catch {
-    return null
-  }
-}
-
-function buildLocalManifest() {
-  const entries = []
-
-  function walk(absDir, rel, destBase) {
-    let names
-    try { names = fs.readdirSync(absDir) } catch { return }
-    for (const name of names) {
-      const abs    = path.join(absDir, name)
-      const relNew = rel ? path.join(rel, name) : name
-      const stat   = fs.statSync(abs)
-      if (stat.isDirectory()) {
-        walk(abs, relNew, destBase)
-      } else {
-        entries.push({
-          src:    abs,
-          dest:   destBase ? path.join(destBase, relNew) : relNew,
-          sha256: fileSha256(abs),
-        })
-      }
-    }
-  }
-
-  for (const { dir, destBase } of INSTALL_BUCKETS) walk(dir, '', destBase)
-
-  // Root-level files (SKSE exe/dll) go first
-  entries.sort((a, b) => {
-    const aRoot = path.dirname(a.dest) === '.'
-    const bRoot = path.dirname(b.dest) === '.'
-    return (aRoot ? 0 : 1) - (bRoot ? 0 : 1)
-  })
-
-  return entries
-}
 
 let installing = false
 
@@ -415,180 +369,263 @@ ipcMain.on('install:start', () => {
   if (installing) return
   installing = true
 
-  const vortexEnabled  = store.get('vortexEnabled')
+  const vortexEnabled   = store.get('vortexEnabled')
   const vortexProfileId = store.get('vortexProfileId')
-
-  if (vortexEnabled) {
-    runVortexInstall(vortexProfileId)
-  } else {
-    runDirectInstall()
-  }
+  const fn = vortexEnabled ? runVortexInstall(vortexProfileId) : runDirectInstall()
+  fn.catch(err => {
+    log('[install] Unhandled error:', err.message)
+    send('install:complete', { success: false, error: `Unexpected error: ${err.message}` })
+    installing = false
+  })
 })
+
+// ── Shared download + extract helpers ─────────────────────────────────────────
+
+/**
+ * Stream the client zip from the backend to a local temp file.
+ * Calls onProgress(bytesReceived, totalBytes) as data arrives.
+ */
+function downloadClientZip(tempPath, onProgress) {
+  const url = `${config.apiUrl}/api/files/zip`
+  return new Promise((resolve, reject) => {
+    const mod = url.startsWith('https') ? https : http
+    const req = mod.get(url, res => {
+      if (res.statusCode === 404) {
+        res.resume()
+        return reject(new Error('Update package not found on server. Run npm run merge on the backend.'))
+      }
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume()
+        return reject(new Error(`Server returned HTTP ${res.statusCode}`))
+      }
+
+      const total    = parseInt(res.headers['content-length'] || '0', 10)
+      let   received = 0
+
+      const file = fs.createWriteStream(tempPath)
+      res.on('data', chunk => {
+        received += chunk.length
+        if (onProgress) onProgress(received, total)
+      })
+      res.pipe(file)
+      file.on('finish', () => file.close(resolve))
+      file.on('error', err => { try { fs.unlinkSync(tempPath) } catch {} reject(err) })
+      res.on('error',  err => { try { fs.unlinkSync(tempPath) } catch {} reject(err) })
+    })
+    req.on('error', reject)
+    req.setTimeout(60_000, () => { req.destroy(); reject(new Error('Download timed out')) })
+  })
+}
+
+/**
+ * Extract the zip at zipPath into destDir, preserving the internal path structure.
+ * Calls onProgress(entryName, index, total) for each file entry.
+ * Returns the number of files extracted.
+ */
+function extractClientZip(zipPath, destDir, onProgress) {
+  const zip     = new AdmZip(zipPath)
+  const entries = zip.getEntries().filter(e => !e.isDirectory)
+  const total   = entries.length
+
+  for (let i = 0; i < total; i++) {
+    const entry = entries[i]
+    zip.extractEntryTo(entry.entryName, destDir, /* maintainEntryPath */ true, /* overwrite */ true)
+    if (onProgress) onProgress(entry.entryName, i + 1, total)
+  }
+
+  return total
+}
 
 // ── Direct install (no Vortex) ────────────────────────────────────────────────
 
-function runDirectInstall() {
-  const temps = []
-
+async function runDirectInstall() {
   const abort = (msg) => {
     log('[install] ABORT:', msg)
-    for (const { tmp } of temps) try { fs.unlinkSync(tmp) } catch {}
     send('install:complete', { success: false, error: msg })
     installing = false
   }
 
+  const skyrimPath = store.get('skyrimPath')
+  if (!skyrimPath) return abort('Skyrim path not configured.')
+
+  const srv = activeServer()
+  if (!srv) return abort('No server selected — open Settings and choose a server.')
+
+  const tempZip = path.join(os.tmpdir(), 'frostfall-client.zip')
+
   try {
-    const skyrimPath = store.get('skyrimPath')
-    log('[install] skyrimPath:', skyrimPath)
-    log('[install] FILES_ROOT:', FILES_ROOT)
-
-    if (!skyrimPath) return abort('Skyrim path not configured.')
-
-    // ── 1. Build manifest ────────────────────────────────────────────────────
-    const manifest = buildLocalManifest()
-    log('[install] manifest count:', manifest.length)
-    if (manifest.length === 0) return abort('No files found in app bundle. Re-build the app.')
-
-    const total   = manifest.length
-    let   skipped = 0
-
-    // ── 2. Copy phase ────────────────────────────────────────────────────────
-    for (let i = 0; i < total; i++) {
-      const { src, dest, sha256: srcHash } = manifest[i]
-      const destAbs = path.join(skyrimPath, dest)
-
-      if (srcHash && fs.existsSync(destAbs) && fileSha256(destAbs) === srcHash) {
-        log(`[install] [${i+1}/${total}] SKIP (unchanged) ${dest}`)
-        skipped++
-        send('install:progress', { file: dest, index: i + 1, total, skipped: true })
-        continue
-      }
-
-      const tmpAbs = destAbs + '.tmp'
-      log(`[install] [${i+1}/${total}] ${dest}`)
-
-      try {
-        fs.mkdirSync(path.dirname(destAbs), { recursive: true })
-        fs.copyFileSync(src, tmpAbs)
-        temps.push({ tmp: tmpAbs, dest: destAbs })
-      } catch (err) {
-        log(`[install]   copy FAILED: ${err.message}`)
-        return abort(`Failed to copy ${dest}: ${err.message}`)
-      }
-
-      send('install:progress', { file: dest, index: i + 1, total, skipped: false })
+    // ── 1. Check whether a download is needed ────────────────────────────────
+    let serverVersion = null
+    try {
+      const vd = await fetchJSON(`${config.apiUrl}/api/files/version`)
+      serverVersion = vd.version
+    } catch {
+      // Backend unreachable — play on cached files if they exist
+      const allPresent = REQUIRED_FILES.every(f => fs.existsSync(path.join(skyrimPath, f)))
+      if (!allPresent) return abort('Backend unreachable and client files are not installed. Check your connection.')
+      log('[install] Backend unreachable — files already installed, updating settings only')
+      writeClientSettings(path.join(skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt'), srv)
+      const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
+      send('install:complete', { success: true, skseOk, upToDate: true })
+      return
     }
 
-    log(`[install] copy phase done. ${skipped} skipped, ${temps.length} to commit.`)
+    const allPresent    = REQUIRED_FILES.every(f => fs.existsSync(path.join(skyrimPath, f)))
+    const needsDownload = serverVersion !== store.get('filesVersion') || !allPresent
 
-    // ── 3. Commit ────────────────────────────────────────────────────────────
-    for (const { tmp, dest } of temps) {
-      try {
-        fs.renameSync(tmp, dest)
-      } catch (err) {
-        for (const t of temps) try { fs.unlinkSync(t.tmp) } catch {}
-        return abort(`Could not commit ${path.basename(dest)}: ${err.message}`)
-      }
+    if (!needsDownload) {
+      log('[install] Files up to date, updating settings only')
+      writeClientSettings(path.join(skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt'), srv)
+      const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
+      send('install:complete', { success: true, skseOk, upToDate: true })
+      return
     }
 
-    // ── 4. Write server connection config ────────────────────────────────────
-    const srv = activeServer()
-    if (!srv) return abort('No server selected — open Settings and choose a server.')
-    const settingsDest = path.join(
-      skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt'
-    )
-    writeClientSettings(settingsDest, srv)
+    // ── 2. Download ──────────────────────────────────────────────────────────
+    send('install:progress', { phase: 'download', file: 'Connecting to server…', index: 0, total: 0, skipped: false })
+    await downloadClientZip(tempZip, (received, total) => {
+      const mb  = n => (n / 1024 / 1024).toFixed(1)
+      const pct = total > 0 ? ` (${Math.round(received / total * 100)}%)` : ''
+      log(`[install] download ${mb(received)}/${mb(total)} MB`)
+      send('install:progress', {
+        phase: 'download',
+        file:  `Downloading update… ${mb(received)} / ${mb(total)} MB${pct}`,
+        index: received, total, skipped: false,
+      })
+    })
+
+    // ── 3. Extract directly into Skyrim directory ────────────────────────────
+    const extracted = extractClientZip(tempZip, skyrimPath, (file, i, total) => {
+      log(`[install] extract [${i}/${total}] ${file}`)
+      send('install:progress', { phase: 'extract', file, index: i, total, skipped: false })
+    })
+    log(`[install] extracted ${extracted} files`)
+
+    // ── 4. Write server settings ─────────────────────────────────────────────
+    writeClientSettings(path.join(skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt'), srv)
+
+    store.set('filesVersion', serverVersion)
 
     // ── 5. Verify SKSE ───────────────────────────────────────────────────────
     const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
-    log('[install] skseOk:', skseOk, '| skipped:', skipped, '/ total:', total)
+    log('[install] skseOk:', skseOk)
     send('install:complete', {
-      success: true, skseOk, skipped, total,
+      success: true, skseOk,
       skseWarning: skseOk ? null : 'skse64_loader.exe was not found after install.',
     })
   } catch (err) {
-    abort(`Unexpected error: ${err.message}`)
+    abort(`Install failed: ${err.message}`)
   } finally {
+    try { fs.unlinkSync(tempZip) } catch {}
     installing = false
   }
 }
 
 // ── Vortex install ────────────────────────────────────────────────────────────
 
-function runVortexInstall(profileId) {
+async function runVortexInstall(profileId) {
   const abort = (msg) => {
     log('[vortex-install] ABORT:', msg)
     send('install:complete', { success: false, error: msg })
     installing = false
   }
 
+  const skyrimPath = store.get('skyrimPath')
+  if (!skyrimPath) return abort('Skyrim path not configured.')
+  if (!profileId)  return abort('No Vortex profile selected. Open Settings and choose a profile.')
+
+  const srv = activeServer()
+  if (!srv) return abort('No server selected — open Settings and choose a server.')
+
+  const stagingDir = vortex.getModStagingDir()
+  const tempZip    = path.join(os.tmpdir(), 'frostfall-client.zip')
+
   try {
-    const skyrimPath = store.get('skyrimPath')
-    log('[vortex-install] skyrimPath:', skyrimPath)
-    log('[vortex-install] profileId:', profileId)
+    // ── 1. Check version ─────────────────────────────────────────────────────
+    let serverVersion = null
+    try {
+      const vd = await fetchJSON(`${config.apiUrl}/api/files/version`)
+      serverVersion = vd.version
+    } catch {
+      const allPresent = REQUIRED_FILES.every(f => fs.existsSync(path.join(skyrimPath, f)))
+      if (!allPresent) return abort('Backend unreachable and client files are not installed. Check your connection.')
+      log('[vortex-install] Backend unreachable — updating settings only')
+      writeClientSettings(path.join(stagingDir, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt'), srv)
+      const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
+      send('install:complete', { success: true, skseOk, upToDate: true, vortex: true })
+      return
+    }
 
-    if (!skyrimPath) return abort('Skyrim path not configured.')
-    if (!profileId)  return abort('No Vortex profile selected. Open Settings and choose a profile.')
+    const allPresent    = REQUIRED_FILES.every(f => fs.existsSync(path.join(skyrimPath, f)))
+    const needsDownload = serverVersion !== store.get('filesVersion') || !allPresent
 
-    // ── 1. Build manifest ────────────────────────────────────────────────────
-    const manifest = buildLocalManifest()
-    log('[vortex-install] manifest count:', manifest.length)
-    if (manifest.length === 0) return abort('No files found in app bundle. Re-build the app.')
+    if (!needsDownload) {
+      log('[vortex-install] Files up to date, updating settings only')
+      writeClientSettings(path.join(stagingDir, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt'), srv)
+      const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
+      send('install:complete', { success: true, skseOk, upToDate: true, vortex: true })
+      return
+    }
 
-    // ── 2. Stage files into Vortex mod folder ────────────────────────────────
-    send('install:progress', { file: 'Preparing Vortex staging…', index: 0, total: manifest.length, skipped: false })
+    // ── 2. Download ──────────────────────────────────────────────────────────
+    send('install:progress', { phase: 'download', file: 'Connecting to server…', index: 0, total: 0, skipped: false })
+    await downloadClientZip(tempZip, (received, total) => {
+      const mb  = n => (n / 1024 / 1024).toFixed(1)
+      const pct = total > 0 ? ` (${Math.round(received / total * 100)}%)` : ''
+      send('install:progress', {
+        phase: 'download',
+        file:  `Downloading update… ${mb(received)} / ${mb(total)} MB${pct}`,
+        index: received, total, skipped: false,
+      })
+    })
 
-    const stagingEntries = manifest.map(e => ({ src: e.src, dest: e.dest }))
+    // ── 3. Extract into Vortex staging ───────────────────────────────────────
+    fs.mkdirSync(stagingDir, { recursive: true })
+    const extracted = extractClientZip(tempZip, stagingDir, (file, i, total) => {
+      log(`[vortex-install] extract [${i}/${total}] ${file}`)
+      send('install:progress', { phase: 'extract', file, index: i, total, skipped: false })
+    })
+    log(`[vortex-install] extracted ${extracted} files to staging`)
 
-    vortex.installToStaging(
-      stagingEntries,
-      app.getVersion(),
-      (file, i, total) => {
-        log(`[vortex-install] stage [${i}/${total}] ${file}`)
-        send('install:progress', { file: `[stage] ${file}`, index: i, total: total * 2, skipped: false })
-      }
-    )
+    // ── 4. Write Vortex mod metadata ─────────────────────────────────────────
+    fs.writeFileSync(path.join(stagingDir, 'meta.ini'), [
+      '[General]',
+      `gameName=${vortex.GAME_ID}`,
+      'modid=0',
+      `version=${app.getVersion()}`,
+      `installTime=${new Date().toISOString()}`,
+      'source=manual',
+      `name=${vortex.MOD_NAME}`,
+      '',
+    ].join('\r\n'))
 
-    // ── 3. Write server connection config to staging ─────────────────────────
-    const srv = activeServer()
-    if (!srv) return abort('No server selected — open Settings and choose a server.')
-    const settingsRel  = path.join('Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt')
-    const settingsDest = path.join(vortex.getModStagingDir(), settingsRel)
-    writeClientSettings(settingsDest, srv)
+    // ── 5. Write server settings to staging ──────────────────────────────────
+    writeClientSettings(path.join(stagingDir, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt'), srv)
     log('[vortex-install] settings written to staging')
 
-    // ── 4. Enable mod in Vortex profile modlist ──────────────────────────────
+    // ── 6. Enable mod in Vortex profile modlist ──────────────────────────────
     vortex.enableModInProfile(profileId)
     log('[vortex-install] modlist updated for profile', profileId)
 
-    // ── 5. Deploy from staging → Skyrim ──────────────────────────────────────
-    const baseIndex = manifest.length
-    const { deployed, skipped } = vortex.deployToGame(
-      skyrimPath,
-      (file, i, total, isSkipped) => {
-        log(`[vortex-install] deploy [${i}/${total}]${isSkipped ? ' SKIP' : ''} ${file}`)
-        send('install:progress', {
-          file:    `[deploy] ${file}`,
-          index:   baseIndex + i,
-          total:   baseIndex + total,
-          skipped: isSkipped,
-        })
-      }
-    )
+    // ── 7. Deploy from staging → Skyrim ──────────────────────────────────────
+    const { deployed, skipped } = vortex.deployToGame(skyrimPath, (file, i, total, isSkipped) => {
+      log(`[vortex-install] deploy [${i}/${total}]${isSkipped ? ' SKIP' : ''} ${file}`)
+      send('install:progress', { phase: 'deploy', file, index: i, total, skipped: isSkipped })
+    })
+    log(`[vortex-install] deployed: ${deployed}, skipped: ${skipped}`)
 
-    // ── 6. Verify SKSE ───────────────────────────────────────────────────────
+    store.set('filesVersion', serverVersion)
+
+    // ── 8. Verify SKSE ───────────────────────────────────────────────────────
     const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
-    log('[vortex-install] done. deployed:', deployed, 'skipped:', skipped, 'skseOk:', skseOk)
-
     send('install:complete', {
-      success: true, skseOk,
-      skipped, total: deployed + skipped,
+      success: true, skseOk, vortex: true,
       skseWarning: skseOk ? null : 'skse64_loader.exe was not found after deploy.',
-      vortex: true,
     })
   } catch (err) {
-    abort(`Unexpected error: ${err.message}`)
+    abort(`Install failed: ${err.message}`)
   } finally {
+    try { fs.unlinkSync(tempZip) } catch {}
     installing = false
   }
 }

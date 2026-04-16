@@ -14,10 +14,11 @@
     "build:mac": "electron-builder --mac"
   },
   "dependencies": {
+    "adm-zip":       "^0.5.10",
     "electron-store": "^8.2.0"
   },
   "devDependencies": {
-    "electron": "^41.2.0",
+    "electron":         "^41.2.0",
     "electron-builder": "^26.8.1"
   },
   "build": {
@@ -30,12 +31,6 @@
       "src/**/*",
       "assets/**/*",
       "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "backend/public/files",
-        "to": "files"
-      }
     ],
     "win": {
       "target": [
