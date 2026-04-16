@@ -7,6 +7,7 @@ const https  = require('https')
 const { spawn } = require('child_process')
 const Store  = require('electron-store')
 const config = require('./config')
+const vortex = require('./vortex')
 
 const isDev = process.argv.includes('--dev')
 
@@ -32,6 +33,9 @@ const store = new Store({
     activeServerIndex: 0,
     discordUser:       null,
     discordToken:      null,
+    vortexPath:        '',
+    vortexProfileId:   '',
+    vortexEnabled:     false,
   }
 })
 
@@ -101,7 +105,7 @@ ipcMain.handle('settings:load', () => ({
   discordUser: store.get('discordUser') || null,
 }))
 ipcMain.handle('settings:save', (_e, data) => {
-  const allowed = ['skyrimPath', 'username', 'activeServerIndex']
+  const allowed = ['skyrimPath', 'username', 'activeServerIndex', 'vortexPath', 'vortexProfileId', 'vortexEnabled']
   const clean   = {}
   for (const k of allowed) if (k in data) clean[k] = data[k]
   store.set(clean)
@@ -220,6 +224,36 @@ ipcMain.handle('discord:login', async () => {
   })
 })
 
+// ── Vortex integration ────────────────────────────────────────────────────────
+
+ipcMain.handle('vortex:detect', () => {
+  const found = vortex.findVortexExe()
+  return { found: !!found, path: found || '' }
+})
+
+ipcMain.handle('vortex:listProfiles', () => vortex.listProfiles())
+
+ipcMain.handle('vortex:getStatus', () => {
+  const vortexPath = store.get('vortexPath')
+  const profileId  = store.get('vortexProfileId')
+  return vortex.getStatus(vortexPath, profileId)
+})
+
+ipcMain.handle('vortex:tagProfile', (_e, profileId, profileName) => {
+  try {
+    vortex.tagProfile(profileId, profileName)
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.on('vortex:openProfilesDir', () => {
+  const dir = vortex.getProfilesRoot()
+  if (fs.existsSync(dir)) shell.openPath(dir)
+  else shell.openPath(vortex.getDataPath())
+})
+
 // ── Metrics ───────────────────────────────────────────────────────────────────
 ipcMain.handle('api:metrics', async () => {
   try { return await fetchJSON(`${activeServer().apiUrl}/api/metrics`) }
@@ -250,19 +284,39 @@ const REQUIRED_FILES = [
 ]
 
 ipcMain.handle('launch:skse', () => {
-  const skyrimPath = store.get('skyrimPath')
+  const skyrimPath     = store.get('skyrimPath')
+  const vortexEnabled  = store.get('vortexEnabled')
+  const vortexProfileId = store.get('vortexProfileId')
+
   if (!skyrimPath) {
     return { success: false, error: 'Skyrim path not configured.' }
   }
 
-  // Pre-launch validation — check all required client files are installed
+  // When Vortex is enabled, give a more informative hint if staging is missing
+  if (vortexEnabled) {
+    const stagingDir = vortex.getModStagingDir()
+    if (!fs.existsSync(stagingDir)) {
+      return {
+        success: false,
+        error:   'Vortex staging not found — run Install / Update Files first.',
+      }
+    }
+    if (!vortexProfileId) {
+      return {
+        success: false,
+        error:   'No Vortex profile selected — open Settings and choose a profile.',
+      }
+    }
+  }
+
+  // Pre-launch validation — check all required client files are in the game dir
   const missing = REQUIRED_FILES.filter(f => !fs.existsSync(path.join(skyrimPath, f)))
   if (missing.length > 0) {
     const names = missing.map(f => path.basename(f)).join(', ')
-    return {
-      success: false,
-      error:   `Files missing — run Install first.\nMissing: ${names}`,
-    }
+    const hint  = vortexEnabled
+      ? `Run Install / Update Files so the Vortex profile deploys them.\nMissing: ${names}`
+      : `Run Install first.\nMissing: ${names}`
+    return { success: false, error: `Files missing — ${hint}` }
   }
 
   const exe = path.join(skyrimPath, 'skse64_loader.exe')
@@ -331,12 +385,26 @@ ipcMain.on('install:start', () => {
   if (installing) return
   installing = true
 
+  const vortexEnabled  = store.get('vortexEnabled')
+  const vortexProfileId = store.get('vortexProfileId')
+
+  if (vortexEnabled) {
+    runVortexInstall(vortexProfileId)
+  } else {
+    runDirectInstall()
+  }
+})
+
+// ── Direct install (no Vortex) ────────────────────────────────────────────────
+
+function runDirectInstall() {
   const temps = []
 
-  const abortWithError = (msg) => {
+  const abort = (msg) => {
     log('[install] ABORT:', msg)
     for (const { tmp } of temps) try { fs.unlinkSync(tmp) } catch {}
     send('install:complete', { success: false, error: msg })
+    installing = false
   }
 
   try {
@@ -344,29 +412,21 @@ ipcMain.on('install:start', () => {
     log('[install] skyrimPath:', skyrimPath)
     log('[install] FILES_ROOT:', FILES_ROOT)
 
-    if (!skyrimPath) {
-      abortWithError('Skyrim path not configured.')
-      return
-    }
+    if (!skyrimPath) return abort('Skyrim path not configured.')
 
     // ── 1. Build manifest ────────────────────────────────────────────────────
     const manifest = buildLocalManifest()
     log('[install] manifest count:', manifest.length)
-
-    if (manifest.length === 0) {
-      abortWithError('No files found in app bundle. Re-build the app.')
-      return
-    }
+    if (manifest.length === 0) return abort('No files found in app bundle. Re-build the app.')
 
     const total   = manifest.length
     let   skipped = 0
 
-    // ── 2. Copy phase — skip unchanged files, write others to .tmp ───────────
+    // ── 2. Copy phase ────────────────────────────────────────────────────────
     for (let i = 0; i < total; i++) {
       const { src, dest, sha256: srcHash } = manifest[i]
       const destAbs = path.join(skyrimPath, dest)
 
-      // Differential update: skip if destination already has the same content
       if (srcHash && fs.existsSync(destAbs) && fileSha256(destAbs) === srcHash) {
         log(`[install] [${i+1}/${total}] SKIP (unchanged) ${dest}`)
         skipped++
@@ -375,7 +435,6 @@ ipcMain.on('install:start', () => {
       }
 
       const tmpAbs = destAbs + '.tmp'
-
       log(`[install] [${i+1}/${total}] ${dest}`)
 
       try {
@@ -384,8 +443,7 @@ ipcMain.on('install:start', () => {
         temps.push({ tmp: tmpAbs, dest: destAbs })
       } catch (err) {
         log(`[install]   copy FAILED: ${err.message}`)
-        abortWithError(`Failed to copy ${dest}: ${err.message}`)
-        return
+        return abort(`Failed to copy ${dest}: ${err.message}`)
       }
 
       send('install:progress', { file: dest, index: i + 1, total, skipped: false })
@@ -393,14 +451,13 @@ ipcMain.on('install:start', () => {
 
     log(`[install] copy phase done. ${skipped} skipped, ${temps.length} to commit.`)
 
-    // ── 3. Commit phase — rename all .tmp → final ────────────────────────────
+    // ── 3. Commit ────────────────────────────────────────────────────────────
     for (const { tmp, dest } of temps) {
       try {
         fs.renameSync(tmp, dest)
       } catch (err) {
         for (const t of temps) try { fs.unlinkSync(t.tmp) } catch {}
-        abortWithError(`Could not commit ${path.basename(dest)}: ${err.message}`)
-        return
+        return abort(`Could not commit ${path.basename(dest)}: ${err.message}`)
       }
     }
 
@@ -418,18 +475,97 @@ ipcMain.on('install:start', () => {
     const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
     log('[install] skseOk:', skseOk, '| skipped:', skipped, '/ total:', total)
     send('install:complete', {
-      success: true,
-      skseOk,
-      skipped,
-      total,
+      success: true, skseOk, skipped, total,
       skseWarning: skseOk ? null : 'skse64_loader.exe was not found after install.',
     })
   } catch (err) {
-    abortWithError(`Unexpected error: ${err.message}`)
+    abort(`Unexpected error: ${err.message}`)
   } finally {
     installing = false
   }
-})
+}
+
+// ── Vortex install ────────────────────────────────────────────────────────────
+
+function runVortexInstall(profileId) {
+  const abort = (msg) => {
+    log('[vortex-install] ABORT:', msg)
+    send('install:complete', { success: false, error: msg })
+    installing = false
+  }
+
+  try {
+    const skyrimPath = store.get('skyrimPath')
+    log('[vortex-install] skyrimPath:', skyrimPath)
+    log('[vortex-install] profileId:', profileId)
+
+    if (!skyrimPath) return abort('Skyrim path not configured.')
+    if (!profileId)  return abort('No Vortex profile selected. Open Settings and choose a profile.')
+
+    // ── 1. Build manifest ────────────────────────────────────────────────────
+    const manifest = buildLocalManifest()
+    log('[vortex-install] manifest count:', manifest.length)
+    if (manifest.length === 0) return abort('No files found in app bundle. Re-build the app.')
+
+    // ── 2. Stage files into Vortex mod folder ────────────────────────────────
+    send('install:progress', { file: 'Preparing Vortex staging…', index: 0, total: manifest.length, skipped: false })
+
+    const stagingEntries = manifest.map(e => ({ src: e.src, dest: e.dest }))
+
+    vortex.installToStaging(
+      stagingEntries,
+      app.getVersion(),
+      (file, i, total) => {
+        log(`[vortex-install] stage [${i}/${total}] ${file}`)
+        send('install:progress', { file: `[stage] ${file}`, index: i, total: total * 2, skipped: false })
+      }
+    )
+
+    // ── 3. Write server connection config to staging ─────────────────────────
+    const srv         = activeServer()
+    const settingsRel = path.join('Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt')
+    const settingsDest = path.join(vortex.getModStagingDir(), settingsRel)
+    fs.mkdirSync(path.dirname(settingsDest), { recursive: true })
+    fs.writeFileSync(settingsDest,
+      `serverAddress = ${srv.address}\nserverPort = ${srv.port}\n`
+    )
+    log('[vortex-install] settings written to staging')
+
+    // ── 4. Enable mod in Vortex profile modlist ──────────────────────────────
+    vortex.enableModInProfile(profileId)
+    log('[vortex-install] modlist updated for profile', profileId)
+
+    // ── 5. Deploy from staging → Skyrim ──────────────────────────────────────
+    const baseIndex = manifest.length
+    const { deployed, skipped } = vortex.deployToGame(
+      skyrimPath,
+      (file, i, total, isSkipped) => {
+        log(`[vortex-install] deploy [${i}/${total}]${isSkipped ? ' SKIP' : ''} ${file}`)
+        send('install:progress', {
+          file:    `[deploy] ${file}`,
+          index:   baseIndex + i,
+          total:   baseIndex + total,
+          skipped: isSkipped,
+        })
+      }
+    )
+
+    // ── 6. Verify SKSE ───────────────────────────────────────────────────────
+    const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
+    log('[vortex-install] done. deployed:', deployed, 'skipped:', skipped, 'skseOk:', skseOk)
+
+    send('install:complete', {
+      success: true, skseOk,
+      skipped, total: deployed + skipped,
+      skseWarning: skseOk ? null : 'skse64_loader.exe was not found after deploy.',
+      vortex: true,
+    })
+  } catch (err) {
+    abort(`Unexpected error: ${err.message}`)
+  } finally {
+    installing = false
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fetchJSON(url) {

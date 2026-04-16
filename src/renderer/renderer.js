@@ -32,6 +32,13 @@ const fieldUsername     = document.getElementById('setting-username')
 const fieldServerSelect = document.getElementById('setting-server')
 const installStatus     = document.getElementById('install-status')
 
+// ── Vortex fields ─────────────────────────────────────────────────────────────
+const fieldVortexPath    = document.getElementById('setting-vortex-path')
+const fieldVortexProfile = document.getElementById('setting-vortex-profile')
+const fieldVortexEnabled = document.getElementById('setting-vortex-enabled')
+const vortexStatusDot    = document.getElementById('vortex-status-dot')
+const vortexStatusText   = document.getElementById('vortex-status-text')
+
 // ── Discord auth state (kept in module scope for PLAY check) ──────────────────
 let discordUser         = null
 let discordAuthRequired = false
@@ -61,6 +68,12 @@ async function loadSettings() {
     discordUser = s.discordUser
     renderDiscordRow()
   }
+
+  // Restore Vortex settings
+  fieldVortexPath.value    = s.vortexPath    || ''
+  fieldVortexEnabled.checked = !!s.vortexEnabled
+  await refreshVortexProfiles(s.vortexProfileId || '')
+  updateVortexStatus()
 
   return s
 }
@@ -130,14 +143,30 @@ function renderDiscordRow() {
 renderDiscordRow()
 
 document.getElementById('btn-save').addEventListener('click', async () => {
+  const profileId = fieldVortexProfile.value.trim()
+
   const data = {
-    skyrimPath: fieldSkyrimPath.value.trim(),
-    username:   fieldUsername.value.trim(),
+    skyrimPath:      fieldSkyrimPath.value.trim(),
+    username:        fieldUsername.value.trim(),
+    vortexPath:      fieldVortexPath.value.trim(),
+    vortexProfileId: profileId,
+    vortexEnabled:   fieldVortexEnabled.checked,
   }
   if (!document.getElementById('group-server-select').hidden) {
     data.activeServerIndex = parseInt(fieldServerSelect.value, 10)
   }
+
+  // Tag the profile with its display name so we can show it on future loads
+  if (profileId) {
+    const selectedOption = fieldVortexProfile.querySelector(`option[value="${profileId}"]`)
+    if (selectedOption) {
+      await window.electronAPI.vortexTagProfile(profileId, selectedOption.textContent)
+    }
+  }
+
   await window.electronAPI.saveSettings(data)
+  updateVortexStatus()
+
   const btn = document.getElementById('btn-save')
   btn.textContent = 'Saved!'
   setTimeout(() => { btn.textContent = 'Save Settings' }, 1400)
@@ -149,6 +178,86 @@ document.getElementById('btn-browse').addEventListener('click', async () => {
   if (folder) fieldSkyrimPath.value = folder
 })
 
+// ── Vortex UI ─────────────────────────────────────────────────────────────────
+
+async function refreshVortexProfiles(selectId) {
+  const profiles = await window.electronAPI.vortexListProfiles()
+
+  // Preserve current selection if no explicit id given
+  const currentVal = selectId !== undefined ? selectId : fieldVortexProfile.value
+
+  fieldVortexProfile.innerHTML = '<option value="">— select profile —</option>'
+  profiles.forEach(p => {
+    const opt = document.createElement('option')
+    opt.value       = p.id
+    opt.textContent = p.name !== p.id ? p.name : `Profile ${p.id.slice(0, 8)}…`
+    opt.selected    = p.id === currentVal
+    fieldVortexProfile.appendChild(opt)
+  })
+}
+
+function updateVortexStatus() {
+  const hasExe     = fieldVortexPath.value.trim().length > 0
+  const hasProfile = fieldVortexProfile.value.trim().length > 0
+  const enabled    = fieldVortexEnabled.checked
+
+  if (!hasExe) {
+    vortexStatusDot.className  = 'vortex-status-dot'
+    vortexStatusText.textContent = 'Vortex not configured'
+  } else if (!hasProfile) {
+    vortexStatusDot.className  = 'vortex-status-dot dot-warn'
+    vortexStatusText.textContent = 'Vortex found — no profile selected'
+  } else if (!enabled) {
+    vortexStatusDot.className  = 'vortex-status-dot dot-warn'
+    vortexStatusText.textContent = 'Vortex configured — integration disabled'
+  } else {
+    const selectedOpt = fieldVortexProfile.querySelector('option:checked')
+    const profileName = selectedOpt?.textContent || fieldVortexProfile.value
+    vortexStatusDot.className  = 'vortex-status-dot dot-ok'
+    vortexStatusText.textContent = `Active — profile: ${profileName}`
+  }
+}
+
+document.getElementById('btn-detect-vortex').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-detect-vortex')
+  btn.disabled = true
+  btn.textContent = 'Detecting…'
+  const result = await window.electronAPI.vortexDetect()
+  if (result.found) {
+    fieldVortexPath.value = result.path
+    await refreshVortexProfiles()
+  } else {
+    fieldVortexPath.value = ''
+    fieldVortexProfile.innerHTML = '<option value="">No Vortex installation found</option>'
+  }
+  updateVortexStatus()
+  btn.disabled = false
+  btn.textContent = 'Auto-detect Vortex'
+})
+
+document.getElementById('btn-browse-vortex').addEventListener('click', async () => {
+  const result = await window.electronAPI.openFolder()
+  if (result) {
+    // User may have pointed at the Vortex install folder — look for Vortex.exe
+    const exePath = result.endsWith('.exe') ? result : result + '\\Vortex.exe'
+    fieldVortexPath.value = exePath
+    await refreshVortexProfiles()
+    updateVortexStatus()
+  }
+})
+
+document.getElementById('btn-refresh-profiles').addEventListener('click', async () => {
+  await refreshVortexProfiles()
+  updateVortexStatus()
+})
+
+document.getElementById('btn-open-profiles').addEventListener('click', () => {
+  window.electronAPI.vortexOpenProfilesDir()
+})
+
+fieldVortexEnabled.addEventListener('change', updateVortexStatus)
+fieldVortexProfile.addEventListener('change', updateVortexStatus)
+
 // ── Install / Update Files ────────────────────────────────────────────────────
 document.getElementById('btn-install').addEventListener('click', () => {
   installStatus.textContent = 'Starting install…'
@@ -159,14 +268,15 @@ document.getElementById('btn-install').addEventListener('click', () => {
     installStatus.textContent = `${prefix} ${file}`
   })
 
-  window.electronAPI.onInstallComplete(({ success, error, skseWarning, skipped, total }) => {
+  window.electronAPI.onInstallComplete(({ success, error, skseWarning, skipped, total, vortex: usedVortex }) => {
     if (!success) {
       installStatus.textContent = `Error: ${error}`
     } else if (skseWarning) {
       installStatus.textContent = `Done — ⚠ ${skseWarning}`
     } else {
-      const note = skipped > 0 ? ` (${skipped}/${total} unchanged)` : ''
-      installStatus.textContent = `Install complete! SKSE ✓${note}`
+      const note   = skipped > 0 ? ` (${skipped}/${total} unchanged)` : ''
+      const prefix = usedVortex ? 'Staged & deployed via Vortex' : 'Install complete'
+      installStatus.textContent = `${prefix}! SKSE ✓${note}`
     }
   })
 
@@ -336,6 +446,68 @@ async function loadNews() {
   items.forEach(item => newsGrid.appendChild(buildNewsCard(item)))
 }
 
+// ── Modlist ───────────────────────────────────────────────────────────────────
+
+// TODO: replace with window.electronAPI.fetchModlist() once the backend API is ready.
+// Expected shape: { name: string, version: string, required?: boolean, enabled: boolean }[]
+const EXAMPLE_MODLIST = [
+  { name: 'SKSE64',                          version: '2.2.6',   required: true,  enabled: true  },
+  { name: 'SkyMP Client',                    version: '0.8.2',   required: true,  enabled: true  },
+  { name: 'Address Library for SKSE',        version: '11.0.0',  required: true,  enabled: true  },
+  { name: 'SkyUI',                           version: '5.2.1',   required: false, enabled: true  },
+  { name: 'Relationship Dialogue Overhaul',  version: '1.0.4',   required: false, enabled: true  },
+  { name: 'Alternate Start – Live Another Life', version: '4.1.7', required: false, enabled: true  },
+  { name: 'Unofficial Skyrim Special Edition Patch', version: '4.3.0', required: false, enabled: true  },
+  { name: 'Immersive Citizens – AI Overhaul', version: '0.4.1',  required: false, enabled: true  },
+  { name: 'A Quality World Map',             version: '9.0.1',   required: false, enabled: false },
+  { name: 'Enhanced Lights and FX',          version: '3.05',    required: false, enabled: false },
+]
+
+function buildModItem(mod) {
+  const item = document.createElement('div')
+  item.className = `modlist-item${mod.enabled ? '' : ' modlist-item--disabled'}`
+
+  const dot = document.createElement('span')
+  dot.className = `mod-dot ${mod.enabled ? 'mod-dot--enabled' : 'mod-dot--disabled'}`
+
+  const name = document.createElement('span')
+  name.className   = 'mod-name'
+  name.textContent = mod.name
+  name.title       = mod.name
+
+  item.appendChild(dot)
+  item.appendChild(name)
+
+  if (mod.required) {
+    const badge = document.createElement('span')
+    badge.className   = 'mod-badge mod-badge--required'
+    badge.textContent = 'REQ'
+    item.appendChild(badge)
+  }
+
+  const ver = document.createElement('span')
+  ver.className   = 'mod-version'
+  ver.textContent = `v${mod.version}`
+  item.appendChild(ver)
+
+  return item
+}
+
+function loadModlist() {
+  // TODO: swap in API call here, e.g.:
+  //   const items = await window.electronAPI.fetchModlist() ?? EXAMPLE_MODLIST
+  const items = EXAMPLE_MODLIST
+
+  const panel = document.getElementById('modlist')
+  const count = document.getElementById('modlist-count')
+
+  panel.innerHTML = ''
+  items.forEach(mod => panel.appendChild(buildModItem(mod)))
+
+  const enabled = items.filter(m => m.enabled).length
+  count.textContent = `${enabled} / ${items.length} enabled`
+}
+
 // ── Metrics modal ─────────────────────────────────────────────────────────────
 const modalMetrics  = document.getElementById('modal-metrics')
 const metricsGrid   = document.getElementById('metrics-grid')
@@ -428,4 +600,5 @@ checkServerStatus()
 checkLauncherUpdate()
 loadNews()
 loadServerInfo()
+loadModlist()
 setInterval(checkServerStatus, 30_000)
