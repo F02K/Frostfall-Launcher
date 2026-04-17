@@ -36,6 +36,8 @@ const installStatus     = document.getElementById('install-status')
 const fieldVortexPath    = document.getElementById('setting-vortex-path')
 const fieldVortexProfile = document.getElementById('setting-vortex-profile')
 const fieldVortexEnabled = document.getElementById('setting-vortex-enabled')
+const fieldVortexStaging = document.getElementById('setting-vortex-staging')
+const fieldNexusApiKey   = document.getElementById('setting-nexus-api-key')
 const vortexStatusDot    = document.getElementById('vortex-status-dot')
 const vortexStatusText   = document.getElementById('vortex-status-text')
 
@@ -72,7 +74,9 @@ async function loadSettings() {
   }
 
   // Restore Vortex settings
-  fieldVortexPath.value    = s.vortexPath    || ''
+  fieldVortexPath.value      = s.vortexPath        || ''
+  fieldVortexStaging.value   = s.vortexStagingPath  || ''
+  fieldNexusApiKey.value     = s.nexusApiKey         || ''
   fieldVortexEnabled.checked = !!s.vortexEnabled
   await refreshVortexProfiles(s.vortexProfileId || '')
   updateVortexStatus()
@@ -148,11 +152,13 @@ document.getElementById('btn-save').addEventListener('click', async () => {
   const profileId = fieldVortexProfile.value.trim()
 
   const data = {
-    skyrimPath:      fieldSkyrimPath.value.trim(),
-    username:        fieldUsername.value.trim(),
-    vortexPath:      fieldVortexPath.value.trim(),
-    vortexProfileId: profileId,
-    vortexEnabled:   fieldVortexEnabled.checked,
+    skyrimPath:        fieldSkyrimPath.value.trim(),
+    username:          fieldUsername.value.trim(),
+    vortexPath:        fieldVortexPath.value.trim(),
+    vortexStagingPath: fieldVortexStaging.value.trim(),
+    nexusApiKey:       fieldNexusApiKey.value.trim(),
+    vortexProfileId:   profileId,
+    vortexEnabled:     fieldVortexEnabled.checked,
   }
   if (!document.getElementById('group-server-select').hidden) {
     data.activeServerIndex = parseInt(fieldServerSelect.value, 10)
@@ -240,10 +246,17 @@ document.getElementById('btn-detect-vortex').addEventListener('click', async () 
 document.getElementById('btn-browse-vortex').addEventListener('click', async () => {
   const result = await window.electronAPI.openFolder()
   if (result) {
-    // User may have pointed at the Vortex install folder — look for Vortex.exe
     const exePath = result.endsWith('.exe') ? result : result + '\\Vortex.exe'
     fieldVortexPath.value = exePath
     await refreshVortexProfiles()
+    updateVortexStatus()
+  }
+})
+
+document.getElementById('btn-browse-staging').addEventListener('click', async () => {
+  const result = await window.electronAPI.openFolder()
+  if (result) {
+    fieldVortexStaging.value = result
     updateVortexStatus()
   }
 })
@@ -279,12 +292,24 @@ document.getElementById('btn-install').addEventListener('click', () => {
   window.electronAPI.onInstallComplete(({ success, error, skseWarning, upToDate, vortex: usedVortex }) => {
     if (!success) {
       installStatus.textContent = `Error: ${error}`
-    } else if (skseWarning) {
+      return
+    }
+
+    if (skseWarning) {
       installStatus.textContent = `Done — ⚠ ${skseWarning}`
-    } else if (upToDate) {
-      installStatus.textContent = 'Already up to date — server settings updated.'
+      return
+    }
+
+    const prefix = upToDate
+      ? 'Server files up to date'
+      : (usedVortex ? 'Staged & deployed via Vortex' : 'Install complete')
+
+    // Warn about any required Nexus mods — those must be installed manually via Vortex.
+    const missingNexus = currentModlist.filter(m => m.source === 'nexus' && m.required && m.enabled)
+    if (missingNexus.length > 0) {
+      const names = missingNexus.map(m => m.name).join(', ')
+      installStatus.textContent = `${prefix}. Install these via Vortex: ${names}`
     } else {
-      const prefix = usedVortex ? 'Staged & deployed via Vortex' : 'Install complete'
       installStatus.textContent = `${prefix}! SKSE ✓`
     }
   })
@@ -295,6 +320,11 @@ document.getElementById('btn-install').addEventListener('click', () => {
 // ── PLAY button ───────────────────────────────────────────────────────────────
 const btnConnect     = document.getElementById('btn-connect')
 const connectWarning = document.getElementById('connect-warning')
+
+window.electronAPI.onLaunchDeploying(() => {
+  btnConnect.disabled     = true
+  btnConnect.textContent  = 'Deploying…'
+})
 
 btnConnect.addEventListener('click', async () => {
   const s = await window.electronAPI.loadSettings()
@@ -310,7 +340,14 @@ btnConnect.addEventListener('click', async () => {
     return
   }
 
+  btnConnect.disabled    = true
+  btnConnect.textContent = 'Launching…'
+
   const result = await window.electronAPI.launchSkse()
+
+  btnConnect.disabled    = false
+  btnConnect.textContent = 'PLAY'
+
   if (!result.success) {
     connectWarning.textContent = result.error
     connectWarning.classList.add('visible')
@@ -458,14 +495,16 @@ async function loadNews() {
 // ── Modlist ───────────────────────────────────────────────────────────────────
 
 const FALLBACK_MODLIST = [
-  { name: 'SKSE64',                                  version: '2.2.6',   required: true,  enabled: true  },
-  { name: 'SkyMP Client',                            version: '0.8.2',   required: true,  enabled: true  },
-  { name: 'Address Library for SKSE',                version: '11.0.0',  required: true,  enabled: true  },
-  { name: 'SkyUI',                                   version: '5.2.1',   required: false, enabled: true  },
-  { name: 'Unofficial Skyrim Special Edition Patch', version: '4.3.0',   required: false, enabled: true  },
-  { name: 'A Quality World Map',                     version: '9.0.1',   required: false, enabled: false },
-  { name: 'Enhanced Lights and FX',                  version: '3.05',    required: false, enabled: false },
+  { name: 'SKSE64',                                  version: '2.2.6',   required: true,  enabled: true,  source: 'backend' },
+  { name: 'SkyMP Client',                            version: '0.8.2',   required: true,  enabled: true,  source: 'backend' },
+  { name: 'Address Library for SKSE',                version: '11.0.0',  required: true,  enabled: true,  source: 'nexus',   nexusId: 32444 },
+  { name: 'SkyUI',                                   version: '5.2.1',   required: false, enabled: true,  source: 'nexus',   nexusId: 12604 },
+  { name: 'Unofficial Skyrim Special Edition Patch', version: '4.3.0',   required: false, enabled: true,  source: 'nexus',   nexusId: 266   },
+  { name: 'A Quality World Map',                     version: '9.0.1',   required: false, enabled: false, source: 'nexus',   nexusId: 5804  },
+  { name: 'Enhanced Lights and FX',                  version: '3.05',    required: false, enabled: false, source: 'nexus',   nexusId: 2424  },
 ]
+
+const NEXUS_BASE = 'https://www.nexusmods.com/skyrimspecialedition/mods'
 
 function buildModItem(mod) {
   const item = document.createElement('div')
@@ -489,6 +528,27 @@ function buildModItem(mod) {
     item.appendChild(badge)
   }
 
+  // Backend mods are installed automatically by the launcher.
+  // Nexus mods need to be installed by the user via Vortex.
+  if (mod.source === 'backend') {
+    const badge = document.createElement('span')
+    badge.className   = 'mod-badge mod-badge--auto'
+    badge.textContent = 'AUTO'
+    badge.title       = 'Installed automatically by the launcher'
+    item.appendChild(badge)
+  } else if (mod.source === 'nexus' && mod.nexusId) {
+    const link = document.createElement('a')
+    link.className   = 'mod-nexus-link'
+    link.textContent = 'Nexus'
+    link.title       = 'Open on Nexus Mods'
+    link.href        = '#'
+    link.addEventListener('click', e => {
+      e.preventDefault()
+      window.electronAPI.openExternal(`${NEXUS_BASE}/${mod.nexusId}`)
+    })
+    item.appendChild(link)
+  }
+
   const ver = document.createElement('span')
   ver.className   = 'mod-version'
   ver.textContent = `v${mod.version}`
@@ -497,17 +557,20 @@ function buildModItem(mod) {
   return item
 }
 
+// Keep a reference to the last-loaded modlist so the install handler can use it.
+let currentModlist = []
+
 async function loadModlist() {
   const panel = document.getElementById('modlist')
   const count = document.getElementById('modlist-count')
 
-  const items = await window.electronAPI.fetchModlist() ?? FALLBACK_MODLIST
+  currentModlist = await window.electronAPI.fetchModlist() ?? FALLBACK_MODLIST
 
   panel.innerHTML = ''
-  items.forEach(mod => panel.appendChild(buildModItem(mod)))
+  currentModlist.forEach(mod => panel.appendChild(buildModItem(mod)))
 
-  const enabled = items.filter(m => m.enabled).length
-  count.textContent = `${enabled} / ${items.length} enabled`
+  const enabled = currentModlist.filter(m => m.enabled).length
+  count.textContent = `${enabled} / ${currentModlist.length} enabled`
 }
 
 // ── Metrics modal ─────────────────────────────────────────────────────────────

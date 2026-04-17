@@ -169,6 +169,13 @@
             <button class="btn-icon" id="btn-refresh-profiles" title="Refresh profile list">&#8635;</button>
             <button class="btn-icon" id="btn-open-profiles" title="Open profiles folder in Explorer">&#128193;</button>
           </div>
+          <div class="setting-path-row" id="vortex-staging-row">
+            <input class="setting-input" id="setting-vortex-staging" type="text"
+                   placeholder="Staging folder (leave empty for Vortex default)" />
+            <button class="btn-browse" id="btn-browse-staging">Browse…</button>
+          </div>
+          <input class="setting-input" id="setting-nexus-api-key" type="password"
+                 placeholder="Nexus API key (optional — enables auto-queue of missing mods)" />
           <label class="setting-checkbox-row" id="vortex-enable-row">
             <input type="checkbox" id="setting-vortex-enabled" />
             <span>Enable Vortex integration — install &amp; deploy via profile</span>

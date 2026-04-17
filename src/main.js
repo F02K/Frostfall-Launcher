@@ -33,6 +33,9 @@ if (LOG_FILE) {
   console.log('[dev] logging to', LOG_FILE)
 }
 
+// Route vortex module debug output through the same logger
+vortex.setLogger(log)
+
 // Only user-specific preferences live in the store.
 const store = new Store({
   defaults: {
@@ -46,6 +49,8 @@ const store = new Store({
     vortexPath:        '',
     vortexProfileId:   '',
     vortexEnabled:     false,
+    vortexStagingPath: '',   // empty = use Vortex default (%APPDATA%\Vortex\skyrimse\mods)
+    nexusApiKey:       '',   // user's free Nexus API key — used to resolve file IDs for nxm:// links
   }
 })
 
@@ -129,7 +134,8 @@ ipcMain.handle('settings:load', async () => {
 })
 ipcMain.handle('settings:save', (_e, data) => {
   const allowed = ['skyrimPath', 'username', 'activeServerIndex',
-                   'vortexPath', 'vortexProfileId', 'vortexEnabled']
+                   'vortexPath', 'vortexProfileId', 'vortexEnabled', 'vortexStagingPath',
+                   'nexusApiKey']
   const clean = {}
   for (const k of allowed) if (k in data) clean[k] = data[k]
   store.set(clean)
@@ -184,64 +190,110 @@ ipcMain.handle('discord:logout', () => {
 })
 
 ipcMain.handle('discord:login', async () => {
-  // 1. Ask backend for the OAuth URL
+  // 1. Start a temporary local HTTP server to receive the OAuth callback.
+  //    Binding to 127.0.0.1 (not 0.0.0.0) keeps it off the network.
+  let server, port
+  try {
+    ;({ server, port } = await startLocalServer())
+  } catch (err) {
+    return { success: false, error: `Could not start local auth server: ${err.message}` }
+  }
+
+  const redirectUri = `http://127.0.0.1:${port}/callback`
+
+  // 2. Ask backend for the OAuth URL, passing our local redirect URI.
+  //    The backend must include this as redirect_uri in the Discord OAuth URL
+  //    and have http://127.0.0.1 registered as an allowed redirect in the
+  //    Discord developer portal.
   let authUrl
   try {
-    const data = await fetchJSON(`${config.apiUrl}/auth/discord/url`)
+    const data = await fetchJSON(
+      `${config.apiUrl}/auth/discord/url?redirect=${encodeURIComponent(redirectUri)}`
+    )
     authUrl = data.url
   } catch (err) {
+    server.close()
     return { success: false, error: `Could not reach backend: ${err.message}` }
   }
-  if (!authUrl) return { success: false, error: 'Discord auth not configured on this server.' }
+  if (!authUrl) {
+    server.close()
+    return { success: false, error: 'Discord auth not configured on this server.' }
+  }
 
-  // 2. Open a minimal auth window and wait for the redirect code
+  // 3. Open Discord OAuth in the user's default browser.
+  shell.openExternal(authUrl)
+
+  // 4. Wait for the callback (5-minute window).
   return new Promise(resolve => {
-    const authWin = new BrowserWindow({
-      width:  520,
-      height: 720,
-      parent: win,
-      modal:  true,
-      title:  'Login with Discord',
-      webPreferences: {
-        nodeIntegration:  false,
-        contextIsolation: true,
-      },
-    })
-
-    authWin.setMenuBarVisibility(false)
-    authWin.loadURL(authUrl)
-
+    const TIMEOUT_MS = 5 * 60 * 1000
     let settled = false
 
-    function handleUrl(url) {
+    const timer = setTimeout(() => {
       if (settled) return
-      if (!url.startsWith('http://localhost:4000/auth/callback')) return
       settled = true
+      server.close()
+      resolve({ success: false, error: 'Login timed out — please try again.' })
+    }, TIMEOUT_MS)
 
-      const code = new URL(url).searchParams.get('code')
-      authWin.close()
+    server.on('request', (req, res) => {
+      if (settled) { res.writeHead(204); res.end(); return }
+
+      let pathname
+      try { pathname = new URL(req.url, `http://127.0.0.1:${port}`).pathname }
+      catch { pathname = '' }
+
+      if (pathname !== '/callback') { res.writeHead(204); res.end(); return }
+
+      settled = true
+      clearTimeout(timer)
+
+      const code = new URL(req.url, `http://127.0.0.1:${port}`).searchParams.get('code')
+
+      // Serve a friendly page so the browser tab doesn't stay blank.
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(`<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Logged in</title>
+<style>
+  body{margin:0;display:flex;align-items:center;justify-content:center;
+       min-height:100vh;background:#1e1f22;font-family:sans-serif;color:#dbdee1}
+  h1{color:#5865f2;margin-bottom:.5rem}p{margin:0;color:#949ba4}
+</style></head><body>
+<div style="text-align:center">
+  <h1>Logged in!</h1>
+  <p>You can close this tab and return to the launcher.</p>
+</div></body></html>`)
+
+      server.close()
 
       if (!code) {
         resolve({ success: false, error: 'No authorization code received.' })
         return
       }
 
-      // 3. Exchange the code via backend (keeps clientSecret server-side)
+      // 5. Exchange the code via backend (keeps the client secret server-side).
       fetchJSON(`${config.apiUrl}/auth/discord/exchange?code=${encodeURIComponent(code)}`)
-        .then(data => {
+        .then(async data => {
           if (!data.ok) return resolve({ success: false, error: data.error })
           store.set('discordUser',  data.user)
           store.set('discordToken', data.accessToken)
+
+          // 6. Get (or create) a stable profileId for this Discord user.
+          //    Used as gameData.profileId in offline-mode client settings.
+          try {
+            const sd = await postJSON(`${config.apiUrl}/auth/session`, { discordUser: data.user })
+            if (sd.profileId != null) store.set('gameProfileId', sd.profileId)
+          } catch { /* non-fatal — profileId will default to 1 */ }
+
           resolve({ success: true, user: data.user })
         })
         .catch(err => resolve({ success: false, error: err.message }))
-    }
+    })
 
-    authWin.webContents.on('will-redirect', (_e, url) => handleUrl(url))
-    authWin.webContents.on('will-navigate',  (_e, url) => handleUrl(url))
-
-    authWin.on('closed', () => {
-      if (!settled) resolve({ success: false, error: 'Login window closed.' })
+    server.on('error', err => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ success: false, error: `Auth server error: ${err.message}` })
     })
   })
 })
@@ -250,10 +302,29 @@ ipcMain.handle('discord:login', async () => {
 
 ipcMain.handle('vortex:detect', () => {
   const found = vortex.findVortexExe()
+
+  // Auto-select the profile if only one exists and none is configured yet.
+  // readProfilesFromState() (async, needs LevelDB) is called separately via
+  // vortex:listProfiles, so we use the fast filesystem-only check here.
+  if (!store.get('vortexProfileId')) {
+    const auto = vortex.autoDetectProfile()
+    if (auto) store.set('vortexProfileId', auto.id)
+  }
+
   return { found: !!found, path: found || '' }
 })
 
-ipcMain.handle('vortex:listProfiles', () => vortex.listProfiles())
+ipcMain.handle('vortex:listProfiles', async () => {
+  const { profiles, activeProfileId } = await vortex.readProfilesFromState()
+
+  // Auto-apply the profile Vortex considers active for skyrimse if the user
+  // hasn't picked one in the launcher yet.
+  if (activeProfileId && !store.get('vortexProfileId')) {
+    store.set('vortexProfileId', activeProfileId)
+  }
+
+  return profiles
+})
 
 ipcMain.handle('vortex:getStatus', () => {
   const vortexPath = store.get('vortexPath')
@@ -278,7 +349,10 @@ ipcMain.on('vortex:openProfilesDir', () => {
 
 // ── Metrics ───────────────────────────────────────────────────────────────────
 ipcMain.handle('api:metrics', async () => {
-  try { return await fetchJSON(`${config.apiUrl}/api/metrics`) }
+  try {
+    const data = await fetchJSON(`${config.apiUrl}/api/metrics`)
+    return { ok: true, ...data }
+  }
   catch { return { ok: false, error: 'Backend unreachable' } }
 })
 
@@ -322,38 +396,38 @@ const REQUIRED_FILES = [
   'skse64_loader.exe',
 ]
 
-ipcMain.handle('launch:skse', () => {
-  const skyrimPath     = store.get('skyrimPath')
-  const vortexEnabled  = store.get('vortexEnabled')
+ipcMain.handle('launch:skse', async () => {
+  const skyrimPath      = store.get('skyrimPath')
+  const vortexEnabled   = store.get('vortexEnabled')
   const vortexProfileId = store.get('vortexProfileId')
 
   if (!skyrimPath) {
     return { success: false, error: 'Skyrim path not configured.' }
   }
 
-  // When Vortex is enabled, give a more informative hint if staging is missing
   if (vortexEnabled) {
-    const stagingDir = vortex.getModStagingDir()
-    if (!fs.existsSync(stagingDir)) {
-      return {
-        success: false,
-        error:   'Vortex staging not found — run Install / Update Files first.',
-      }
-    }
     if (!vortexProfileId) {
-      return {
-        success: false,
-        error:   'No Vortex profile selected — open Settings and choose a profile.',
-      }
+      return { success: false, error: 'No Vortex profile selected — open Settings and choose a profile.' }
     }
   }
 
-  // Pre-launch validation — check all required client files are in the game dir
-  const missing = REQUIRED_FILES.filter(f => !fs.existsSync(path.join(skyrimPath, f)))
-  if (missing.length > 0) {
-    const names = missing.map(f => path.basename(f)).join(', ')
+  // Re-write client settings before launch so server-ip/port/gameData are current.
+  const srv = activeServer()
+  if (srv) {
+    try {
+      const serverInfo = await fetchJSON(`${config.apiUrl}/api/serverinfo`)
+      const settingsPath = path.join(skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt')
+      writeClientSettings(settingsPath, srv, serverInfo)
+      log('[launch] client settings written')
+    } catch { /* non-fatal — use previously written settings */ }
+  }
+
+  // Pre-launch validation
+  const missingFiles = REQUIRED_FILES.filter(f => !fs.existsSync(path.join(skyrimPath, f)))
+  if (missingFiles.length > 0) {
+    const names = missingFiles.map(f => path.basename(f)).join(', ')
     const hint  = vortexEnabled
-      ? `Run Install / Update Files so the Vortex profile deploys them.\nMissing: ${names}`
+      ? `Run "Deploy Mods" in Vortex, then try again.\nMissing: ${names}`
       : `Run Install first.\nMissing: ${names}`
     return { success: false, error: `Files missing — ${hint}` }
   }
@@ -459,18 +533,27 @@ async function runDirectInstall() {
 
   const tempZip = path.join(os.tmpdir(), 'frostfall-client.zip')
 
+  // Fetch serverinfo once so writeClientSettings knows offline vs online mode.
+  let serverInfo = { offlineMode: true }
+  try { serverInfo = await fetchJSON(`${config.apiUrl}/api/serverinfo`) } catch {}
+
+  const clientSettingsPath = path.join(skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt')
+
   try {
     // ── 1. Check whether a download is needed ────────────────────────────────
     let serverVersion = null
     try {
       const vd = await fetchJSON(`${config.apiUrl}/api/files/version`)
       serverVersion = vd.version
-    } catch {
-      // Backend unreachable — play on cached files if they exist
+    } catch (err) {
+      if (err.statusCode === 404) {
+        return abort('Client files have not been packaged on the server yet. Ask the server admin to run `npm run merge`.')
+      }
+      // Network error — play on cached files if they exist
       const allPresent = REQUIRED_FILES.every(f => fs.existsSync(path.join(skyrimPath, f)))
       if (!allPresent) return abort('Backend unreachable and client files are not installed. Check your connection.')
-      log('[install] Backend unreachable — files already installed, updating settings only')
-      writeClientSettings(path.join(skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt'), srv)
+      log('[install] Backend unreachable - files already installed, updating settings only')
+      writeClientSettings(clientSettingsPath, srv, serverInfo)
       const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
       send('install:complete', { success: true, skseOk, upToDate: true })
       return
@@ -481,7 +564,7 @@ async function runDirectInstall() {
 
     if (!needsDownload) {
       log('[install] Files up to date, updating settings only')
-      writeClientSettings(path.join(skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt'), srv)
+      writeClientSettings(clientSettingsPath, srv, serverInfo)
       const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
       send('install:complete', { success: true, skseOk, upToDate: true })
       return
@@ -508,7 +591,7 @@ async function runDirectInstall() {
     log(`[install] extracted ${extracted} files`)
 
     // ── 4. Write server settings ─────────────────────────────────────────────
-    writeClientSettings(path.join(skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt'), srv)
+    writeClientSettings(clientSettingsPath, srv, serverInfo)
 
     store.set('filesVersion', serverVersion)
 
@@ -543,91 +626,161 @@ async function runVortexInstall(profileId) {
   const srv = activeServer()
   if (!srv) return abort('No server selected — open Settings and choose a server.')
 
-  const stagingDir = vortex.getModStagingDir()
-  const tempZip    = path.join(os.tmpdir(), 'frostfall-client.zip')
+  const tempZip = path.join(os.tmpdir(), 'frostfall-client.zip')
+
+  // Fetch serverinfo once so writeClientSettings knows offline vs online mode.
+  let serverInfo = { offlineMode: true }
+  try { serverInfo = await fetchJSON(`${config.apiUrl}/api/serverinfo`) } catch {}
+
+  const clientSettingsPath = path.join(
+    skyrimPath,
+    'Data',
+    'Platform',
+    'Plugins',
+    'skymp5-client-settings.txt'
+  )
 
   try {
-    // ── 1. Check version ─────────────────────────────────────────────────────
+    // ── 1. FORCE install ALL Nexus mods ───────────────────────────────────────
+    try {
+      const modlistData = await fetchJSON(`${config.apiUrl}/api/modlist`)
+      const vortexExe   = store.get('vortexPath')
+      const apiKey      = store.get('nexusApiKey') || ''
+
+      let vortexStarted = false
+
+      if (Array.isArray(modlistData)) {
+        for (const mod of modlistData) {
+          if (mod.source !== 'nexus' || !mod.nexusId) continue
+
+          const fileId =
+            mod.fileId ??
+            (apiKey ? await fetchNexusFileId(mod.nexusId, apiKey) : null)
+
+          // Ensure Vortex is running once
+          if (!vortexStarted && vortexExe && fs.existsSync(vortexExe)) {
+            spawn(vortexExe, ['--game', 'skyrimse'], {
+              detached: true,
+              stdio: 'ignore',
+            }).unref()
+
+            await new Promise(r => setTimeout(r, 1500))
+            vortexStarted = true
+          }
+
+          if (fileId) {
+            shell.openExternal(
+              `nxm://skyrimspecialedition/mods/${mod.nexusId}/files/${fileId}`
+            )
+            log(`[vortex-install] FORCE install ${mod.name} (${mod.nexusId}/${fileId})`)
+          } else {
+            shell.openExternal(
+              `https://www.nexusmods.com/skyrimspecialedition/mods/${mod.nexusId}?tab=files`
+            )
+            log(`[vortex-install] ${mod.name} opened Nexus page (no fileId)`)
+          }
+        }
+      }
+    } catch {
+      log('[vortex-install] could not fetch modlist, skipping Nexus mod sync')
+    }
+
+    // ── 2. Backend file handling (UNCHANGED) ──────────────────────────────────
     let serverVersion = null
     try {
       const vd = await fetchJSON(`${config.apiUrl}/api/files/version`)
       serverVersion = vd.version
-    } catch {
-      const allPresent = REQUIRED_FILES.every(f => fs.existsSync(path.join(skyrimPath, f)))
-      if (!allPresent) return abort('Backend unreachable and client files are not installed. Check your connection.')
-      log('[vortex-install] Backend unreachable — updating settings only')
-      writeClientSettings(path.join(stagingDir, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt'), srv)
-      const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
-      send('install:complete', { success: true, skseOk, upToDate: true, vortex: true })
+    } catch (err) {
+      if (err.statusCode === 404) {
+        return abort(
+          'Client files have not been packaged on the server yet. Ask the server admin to run `npm run merge`.'
+        )
+      }
+
+      const allPresent = REQUIRED_FILES.every(f =>
+        fs.existsSync(path.join(skyrimPath, f))
+      )
+
+      if (!allPresent)
+        return abort(
+          'Backend unreachable and client files are not installed. Check your connection.'
+        )
+
+      log('[vortex-install] Backend unreachable — files present, updating settings only')
+
+      writeClientSettings(clientSettingsPath, srv, serverInfo)
+
+      send('install:complete', {
+        success: true,
+        upToDate: true,
+        vortex: true,
+      })
       return
     }
 
-    const allPresent    = REQUIRED_FILES.every(f => fs.existsSync(path.join(skyrimPath, f)))
-    const needsDownload = serverVersion !== store.get('filesVersion') || !allPresent
+    const allPresent = REQUIRED_FILES.every(f =>
+      fs.existsSync(path.join(skyrimPath, f))
+    )
+
+    const needsDownload =
+      serverVersion !== store.get('filesVersion') || !allPresent
 
     if (!needsDownload) {
-      log('[vortex-install] Files up to date, updating settings only')
-      writeClientSettings(path.join(stagingDir, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt'), srv)
-      const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
-      send('install:complete', { success: true, skseOk, upToDate: true, vortex: true })
+      log('[vortex-install] Backend files up to date — updating settings only')
+
+      writeClientSettings(clientSettingsPath, srv, serverInfo)
+
+      send('install:complete', {
+        success: true,
+        upToDate: true,
+        vortex: true,
+      })
       return
     }
 
-    // ── 2. Download ──────────────────────────────────────────────────────────
-    send('install:progress', { phase: 'download', file: 'Connecting to server…', index: 0, total: 0, skipped: false })
+    // ── 3. Download backend zip ───────────────────────────────────────────────
+    send('install:progress', {
+      phase: 'download',
+      file: 'Connecting to server…',
+      index: 0,
+      total: 0,
+      skipped: false,
+    })
+
     await downloadClientZip(tempZip, (received, total) => {
-      const mb  = n => (n / 1024 / 1024).toFixed(1)
+      const mb = n => (n / 1024 / 1024).toFixed(1)
       const pct = total > 0 ? ` (${Math.round(received / total * 100)}%)` : ''
+
       send('install:progress', {
         phase: 'download',
-        file:  `Downloading update… ${mb(received)} / ${mb(total)} MB${pct}`,
-        index: received, total, skipped: false,
+        file: `Downloading update… ${mb(received)} / ${mb(total)} MB${pct}`,
+        index: received,
+        total,
+        skipped: false,
       })
     })
 
-    // ── 3. Extract into Vortex staging ───────────────────────────────────────
-    fs.mkdirSync(stagingDir, { recursive: true })
-    const extracted = extractClientZip(tempZip, stagingDir, (file, i, total) => {
+    // ── 4. Extract ───────────────────────────────────────────────────────────
+    const extracted = extractClientZip(tempZip, skyrimPath, (file, i, total) => {
       log(`[vortex-install] extract [${i}/${total}] ${file}`)
-      send('install:progress', { phase: 'extract', file, index: i, total, skipped: false })
+      send('install:progress', {
+        phase: 'extract',
+        file,
+        index: i,
+        total,
+        skipped: false,
+      })
     })
-    log(`[vortex-install] extracted ${extracted} files to staging`)
 
-    // ── 4. Write Vortex mod metadata ─────────────────────────────────────────
-    fs.writeFileSync(path.join(stagingDir, 'meta.ini'), [
-      '[General]',
-      `gameName=${vortex.GAME_ID}`,
-      'modid=0',
-      `version=${app.getVersion()}`,
-      `installTime=${new Date().toISOString()}`,
-      'source=manual',
-      `name=${vortex.MOD_NAME}`,
-      '',
-    ].join('\r\n'))
+    log(`[vortex-install] extracted ${extracted} files`)
 
-    // ── 5. Write server settings to staging ──────────────────────────────────
-    writeClientSettings(path.join(stagingDir, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt'), srv)
-    log('[vortex-install] settings written to staging')
-
-    // ── 6. Enable mod in Vortex profile modlist ──────────────────────────────
-    vortex.enableModInProfile(profileId)
-    log('[vortex-install] modlist updated for profile', profileId)
-
-    // ── 7. Deploy from staging → Skyrim ──────────────────────────────────────
-    const { deployed, skipped } = vortex.deployToGame(skyrimPath, (file, i, total, isSkipped) => {
-      log(`[vortex-install] deploy [${i}/${total}]${isSkipped ? ' SKIP' : ''} ${file}`)
-      send('install:progress', { phase: 'deploy', file, index: i, total, skipped: isSkipped })
-    })
-    log(`[vortex-install] deployed: ${deployed}, skipped: ${skipped}`)
+    // ── 5. Settings ──────────────────────────────────────────────────────────
+    writeClientSettings(clientSettingsPath, srv, serverInfo)
+    log('[vortex-install] settings written')
 
     store.set('filesVersion', serverVersion)
 
-    // ── 8. Verify SKSE ───────────────────────────────────────────────────────
-    const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
-    send('install:complete', {
-      success: true, skseOk, vortex: true,
-      skseWarning: skseOk ? null : 'skse64_loader.exe was not found after deploy.',
-    })
+    send('install:complete', { success: true, vortex: true })
   } catch (err) {
     abort(`Install failed: ${err.message}`)
   } finally {
@@ -639,22 +792,127 @@ async function runVortexInstall(profileId) {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Write (or merge into) the SkyMP client settings JSON file.
- * Only server-ip and server-port are touched — all other keys the user or the
- * client itself may have set (gameData, master, server-public-keys, …) are
- * preserved unchanged.
+ * Write the SkyMP client settings file (skymp5-client-settings.txt).
+ *
+ * Format per SkyMP docs:
+ *
+ *   Offline mode (server offlineMode: true):
+ *     { "server-ip": "...", "server-port": N,
+ *       "master": "", "server-master-key": null,
+ *       "gameData": { "profileId": <integer> } }
+ *
+ *   Online mode (server offlineMode: false):
+ *     { "server-ip": "...", "server-port": N,
+ *       "master": "<masterUrl>", "server-master-key": "<masterKey>" }
+ *     gameData is absent — the SkyMP client manages auth via in-game browser.
+ *
+ * @param {string} destPath   Absolute path to skymp5-client-settings.txt
+ * @param {object} srv        Active server entry { address, port }
+ * @param {object} serverInfo Cached serverinfo { offlineMode, masterKey, masterUrl }
  */
-function writeClientSettings(destPath, srv) {
-  let settings = {}
-  try {
-    settings = JSON.parse(fs.readFileSync(destPath, 'utf8'))
-  } catch { /* file absent or invalid — start fresh */ }
+function writeClientSettings(destPath, srv, serverInfo) {
+  // Start fresh every time — do not preserve stale keys from previous writes.
+  const settings = {}
 
   settings['server-ip']   = srv.address
   settings['server-port'] = Number(srv.port)
 
+  const offlineMode = serverInfo?.offlineMode ?? true
+
+  if (offlineMode) {
+    const profileId = store.get('gameProfileId')
+    settings['master']            = ''
+    settings['server-master-key'] = null
+    settings['gameData']          = { profileId: profileId ?? 1 }
+  } else {
+    // Online mode — no gameData; SkyMP client handles auth in-game.
+    settings['master']            = serverInfo?.masterUrl  || ''
+    settings['server-master-key'] = serverInfo?.masterKey  || null
+  }
+
   fs.mkdirSync(path.dirname(destPath), { recursive: true })
   fs.writeFileSync(destPath, JSON.stringify(settings, null, 2) + '\n')
+}
+
+/**
+ * Start an HTTP server on a random free port bound to 127.0.0.1.
+ * Resolves with { server, port } once the server is listening.
+ */
+function startLocalServer() {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer()
+    server.listen(0, '127.0.0.1', () => {
+      resolve({ server, port: server.address().port })
+    })
+    server.on('error', reject)
+  })
+}
+
+/**
+ * Fetch the latest main-file ID for a Nexus mod using the Nexus API.
+ * Returns the numeric fileId or null on failure.
+ */
+function fetchNexusFileId(nexusId, apiKey) {
+  return new Promise(resolve => {
+    const opts = {
+      hostname: 'api.nexusmods.com',
+      path:     `/v1/games/skyrimspecialedition/mods/${nexusId}/files.json?category=main`,
+      headers:  {
+        apikey:           apiKey,
+        'User-Agent':     'Frostfall-Launcher/1.0.0',
+        accept:           'application/json',
+      },
+    }
+    const req = https.get(opts, res => {
+      let data = ''
+      res.on('data', c => { data += c })
+      res.on('end', () => {
+        try {
+          const json  = JSON.parse(data)
+          const files = json.files || []
+          // Pick the newest main file (highest file_id)
+          const main  = files
+            .filter(f => f.category_name === 'MAIN')
+            .sort((a, b) => b.file_id - a.file_id)[0]
+          resolve(main ? main.file_id : null)
+        } catch { resolve(null) }
+      })
+    })
+    req.on('error', () => resolve(null))
+    req.setTimeout(10_000, () => { req.destroy(); resolve(null) })
+  })
+}
+
+function postJSON(url, body) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body)
+    const mod     = url.startsWith('https') ? https : http
+    const opts    = Object.assign(new URL(url), {
+      method:  'POST',
+      headers: {
+        'Content-Type':   'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    })
+    const req = mod.request(opts, res => {
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume()
+        const e = new Error(`HTTP ${res.statusCode} from ${url}`)
+        e.statusCode = res.statusCode
+        return reject(e)
+      }
+      let data = ''
+      res.on('data', chunk => { data += chunk })
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)) }
+        catch (e) { reject(new Error(`Invalid JSON from ${url}: ${e.message}`)) }
+      })
+    })
+    req.on('error', reject)
+    req.setTimeout(10_000, () => { req.destroy(); reject(new Error(`Request timed out: ${url}`)) })
+    req.write(payload)
+    req.end()
+  })
 }
 
 function fetchJSON(url) {
@@ -663,7 +921,9 @@ function fetchJSON(url) {
     const req = mod.get(url, res => {
       if (res.statusCode < 200 || res.statusCode >= 300) {
         res.resume()
-        reject(new Error(`HTTP ${res.statusCode} from ${url}`))
+        const e = new Error(`HTTP ${res.statusCode} from ${url}`)
+        e.statusCode = res.statusCode
+        reject(e)
         return
       }
       let data = ''

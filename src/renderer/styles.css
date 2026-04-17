@@ -395,6 +395,32 @@ html, body {
   color: rgba(201, 162, 39, 0.75);
 }
 
+.mod-badge--auto {
+  background: rgba(88, 166, 255, 0.10);
+  border: 1px solid rgba(88, 166, 255, 0.25);
+  color: rgba(88, 166, 255, 0.70);
+}
+
+.mod-nexus-link {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(218, 130, 42, 0.10);
+  border: 1px solid rgba(218, 130, 42, 0.28);
+  color: rgba(218, 130, 42, 0.75);
+  text-decoration: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.mod-nexus-link:hover {
+  background: rgba(218, 130, 42, 0.20);
+  color: rgba(218, 130, 42, 1);
+}
+
 .mod-version {
   font-family: 'Barlow Condensed', sans-serif;
   font-size: 10px;
