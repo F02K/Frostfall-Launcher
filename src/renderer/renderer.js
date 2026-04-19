@@ -5,8 +5,8 @@ document.getElementById('btn-close').addEventListener('click',    () => window.e
 
 // ── External nav links ────────────────────────────────────────────────────────
 const EXTERNAL_URLS = {
-  website: '',   // e.g. 'https://frostfall.example.com'
-  discord: '',   // e.g. 'https://discord.gg/...'
+  website: 'https://frostfall.online',   // e.g. 'https://frostfall.example.com'
+  discord: 'https://discord.gg/4KHMqUUKNT',   // e.g. 'https://discord.gg/...'
 }
 
 document.querySelectorAll('.topnav-link[data-href]').forEach(link => {
@@ -26,11 +26,27 @@ document.getElementById('btn-gear').addEventListener('click', openModal)
 document.getElementById('modal-close').addEventListener('click', closeModal)
 modalOverlay.addEventListener('click', e => { if (e.target === modalOverlay) closeModal() })
 
+// ── Settings tabs ─────────────────────────────────────────────────────────────
+document.querySelectorAll('.modal-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.modal-tab').forEach(t => t.classList.remove('active'))
+    document.querySelectorAll('.tab-panel').forEach(p => { p.hidden = true })
+    tab.classList.add('active')
+    document.getElementById(`tab-${tab.dataset.tab}`).hidden = false
+  })
+})
+
 // ── Form fields ───────────────────────────────────────────────────────────────
 const fieldSkyrimPath   = document.getElementById('setting-skyrim-path')
-const fieldUsername     = document.getElementById('setting-username')
-const fieldServerSelect = document.getElementById('setting-server')
 const installStatus     = document.getElementById('install-status')
+
+// ── Footer server selector ────────────────────────────────────────────────────
+const footerServerName   = document.getElementById('footer-server-name')
+const footerServerSelect = document.getElementById('footer-server-select')
+
+footerServerSelect.addEventListener('change', () => {
+  window.electronAPI.saveSettings({ activeServerIndex: parseInt(footerServerSelect.value, 10) })
+})
 
 // ── Vortex fields ─────────────────────────────────────────────────────────────
 const fieldVortexPath    = document.getElementById('setting-vortex-path')
@@ -49,28 +65,31 @@ let discordAuthRequired = false
 async function loadSettings() {
   const s = await window.electronAPI.loadSettings()
   fieldSkyrimPath.value = s.skyrimPath || ''
-  fieldUsername.value   = s.username   || ''
 
-  // Server selector — only visible when >1 server is returned by the API
-  const group = document.getElementById('group-server-select')
+  // Footer server selector — dropdown when >1 server, plain text otherwise
   if (s.servers && s.servers.length > 1) {
-    group.hidden = false
-    fieldServerSelect.innerHTML = ''
+    footerServerName.hidden   = true
+    footerServerSelect.hidden = false
+    footerServerSelect.innerHTML = ''
     s.servers.forEach((srv, i) => {
       const opt = document.createElement('option')
       opt.value       = i
       opt.textContent = srv.name
       opt.selected    = i === (s.activeServerIndex || 0)
-      fieldServerSelect.appendChild(opt)
+      footerServerSelect.appendChild(opt)
     })
   } else {
-    group.hidden = true
+    footerServerName.hidden   = false
+    footerServerSelect.hidden = true
+    if (s.servers && s.servers.length === 1) {
+      footerServerName.textContent = s.servers[0].name
+    }
   }
 
   // Restore Discord user from persisted store
   if (s.discordUser) {
     discordUser = s.discordUser
-    renderDiscordRow()
+    renderTopbarDiscord()
   }
 
   // Restore Vortex settings
@@ -84,84 +103,81 @@ async function loadSettings() {
   return s
 }
 
-// ── Discord login / logout ────────────────────────────────────────────────────
-const discordAuthRow = document.getElementById('discord-auth-row')
+// ── Discord topbar widget ─────────────────────────────────────────────────────
+const discordTopbarSlot = document.getElementById('discord-topbar-slot')
 
-function renderDiscordRow() {
-  discordAuthRow.innerHTML = ''
+function renderTopbarDiscord() {
+  discordTopbarSlot.innerHTML = ''
 
   if (discordUser) {
-    const userBox = document.createElement('div')
-    userBox.className = 'discord-user'
+    const wrap = document.createElement('div')
+    wrap.className = 'discord-topbar-user'
 
     if (discordUser.avatar) {
       const img = document.createElement('img')
-      img.className = 'discord-avatar'
+      img.className = 'discord-topbar-avatar'
       img.src = discordUser.avatar
       img.alt = discordUser.username
-      userBox.appendChild(img)
+      wrap.appendChild(img)
     } else {
       const ph = document.createElement('div')
-      ph.className   = 'discord-avatar-placeholder'
+      ph.className   = 'discord-topbar-avatar-placeholder'
       ph.textContent = '✦'
-      userBox.appendChild(ph)
+      wrap.appendChild(ph)
     }
 
     const name = document.createElement('span')
-    name.className   = 'discord-username'
+    name.className   = 'discord-topbar-name'
     name.textContent = discordUser.tag || discordUser.username
-    userBox.appendChild(name)
-
-    discordAuthRow.appendChild(userBox)
+    wrap.appendChild(name)
 
     const logoutBtn = document.createElement('button')
-    logoutBtn.className   = 'btn-discord-logout'
-    logoutBtn.textContent = 'Logout'
+    logoutBtn.className   = 'discord-topbar-logout'
+    logoutBtn.title       = 'Logout'
+    logoutBtn.textContent = '✕'
     logoutBtn.addEventListener('click', async () => {
       await window.electronAPI.discordLogout()
       discordUser = null
-      renderDiscordRow()
+      renderTopbarDiscord()
     })
-    discordAuthRow.appendChild(logoutBtn)
+    wrap.appendChild(logoutBtn)
+
+    discordTopbarSlot.appendChild(wrap)
   } else {
     const loginBtn = document.createElement('button')
-    loginBtn.className   = 'btn-discord-login'
-    loginBtn.textContent = 'Login with Discord'
+    loginBtn.className   = 'btn-discord-topbar'
+    loginBtn.textContent = 'Discord Login'
     loginBtn.addEventListener('click', async () => {
-      loginBtn.disabled   = true
+      loginBtn.disabled    = true
       loginBtn.textContent = 'Opening…'
       const result = await window.electronAPI.discordLogin()
       if (result.success) {
         discordUser = result.user
-        renderDiscordRow()
+        renderTopbarDiscord()
       } else {
-        loginBtn.disabled   = false
-        loginBtn.textContent = 'Login with Discord'
+        loginBtn.disabled    = false
+        loginBtn.textContent = 'Discord Login'
         connectWarning.textContent = `Discord: ${result.error}`
         connectWarning.classList.add('visible')
         setTimeout(() => connectWarning.classList.remove('visible'), 4000)
       }
     })
-    discordAuthRow.appendChild(loginBtn)
+    discordTopbarSlot.appendChild(loginBtn)
   }
 }
 
-renderDiscordRow()
+renderTopbarDiscord()
 
 document.getElementById('btn-save').addEventListener('click', async () => {
   const profileId = fieldVortexProfile.value.trim()
 
   const data = {
     skyrimPath:        fieldSkyrimPath.value.trim(),
-    username:          fieldUsername.value.trim(),
     vortexPath:        fieldVortexPath.value.trim(),
     vortexStagingPath: fieldVortexStaging.value.trim(),
     nexusApiKey:       fieldNexusApiKey.value.trim(),
     vortexProfileId:   profileId,
     vortexEnabled:     fieldVortexEnabled.checked,
-  }
-  if (!document.getElementById('group-server-select').hidden) {
-    data.activeServerIndex = parseInt(fieldServerSelect.value, 10)
   }
 
   // Tag the profile with its display name so we can show it on future loads
@@ -335,26 +351,54 @@ btnConnect.addEventListener('click', async () => {
   }
 
   if (!discordUser) {
-    connectWarning.textContent = 'Login with Discord first — open Settings to connect.'
+    connectWarning.textContent = 'Login with Discord first — use the button in the toolbar.'
     connectWarning.classList.add('visible')
     return
   }
 
   btnConnect.disabled    = true
-  btnConnect.textContent = 'Launching…'
+  btnConnect.textContent = 'Updating…'
+  connectWarning.classList.remove('visible')
 
-  const result = await window.electronAPI.launchSkse()
+  // Step 1: Install / update client files before launching
+  window.electronAPI.removeInstallListeners()
 
-  btnConnect.disabled    = false
-  btnConnect.textContent = 'PLAY'
+  await new Promise(resolve => {
+    window.electronAPI.onInstallProgress(({ phase }) => {
+      btnConnect.textContent = phase === 'download' ? 'Downloading…' : 'Installing…'
+    })
 
-  if (!result.success) {
-    connectWarning.textContent = result.error
-    connectWarning.classList.add('visible')
-  } else {
-    connectWarning.classList.remove('visible')
-    connectWarning.textContent = ''
-  }
+    window.electronAPI.onInstallComplete(async ({ success, error }) => {
+      window.electronAPI.removeInstallListeners()
+
+      if (!success) {
+        connectWarning.textContent = error
+        connectWarning.classList.add('visible')
+        btnConnect.disabled    = false
+        btnConnect.textContent = 'PLAY'
+        resolve()
+        return
+      }
+
+      // Step 2: Launch the game
+      btnConnect.textContent = 'Launching…'
+      const result = await window.electronAPI.launchSkse()
+
+      if (!result.success) {
+        connectWarning.textContent = result.error
+        connectWarning.classList.add('visible')
+      } else {
+        connectWarning.classList.remove('visible')
+        connectWarning.textContent = ''
+      }
+
+      btnConnect.disabled    = false
+      btnConnect.textContent = 'PLAY'
+      resolve()
+    })
+
+    window.electronAPI.startInstall()
+  })
 })
 
 // ── Server status ─────────────────────────────────────────────────────────────

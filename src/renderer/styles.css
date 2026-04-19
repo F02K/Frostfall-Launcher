@@ -1039,11 +1039,164 @@ html, body {
   color: var(--parchment);
 }
 
-/* ── Vortex integration ───────────────────────────── */
-.settings-group--vortex {
-  border-top: 1px solid var(--glass-border);
-  padding-top: 16px;
+/* ── Discord topbar widget ────────────────────────── */
+#discord-topbar-slot {
+  display: flex;
+  align-items: center;
+  margin-right: 8px;
 }
+
+.btn-discord-topbar {
+  padding: 5px 13px;
+  background: rgba(88, 101, 242, 0.15);
+  border: 1px solid rgba(88, 101, 242, 0.35);
+  color: rgba(150, 160, 255, 0.85);
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn-discord-topbar:hover {
+  background: rgba(88, 101, 242, 0.28);
+  border-color: rgba(88, 101, 242, 0.6);
+  color: #b0b8ff;
+}
+
+.btn-discord-topbar:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.discord-topbar-user {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 6px;
+  background: rgba(88, 101, 242, 0.08);
+  border: 1px solid rgba(88, 101, 242, 0.22);
+  cursor: default;
+}
+
+.discord-topbar-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.discord-topbar-avatar-placeholder {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(88, 101, 242, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  flex-shrink: 0;
+  color: rgba(200, 210, 255, 0.7);
+}
+
+.discord-topbar-name {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  color: rgba(200, 210, 255, 0.85);
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discord-topbar-logout {
+  width: 18px;
+  height: 18px;
+  background: transparent;
+  border: none;
+  color: rgba(88, 101, 242, 0.4);
+  font-size: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  transition: all 0.15s;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.discord-topbar-logout:hover {
+  background: rgba(160, 40, 30, 0.65);
+  color: #fff;
+}
+
+/* ── Footer server select ─────────────────────────── */
+.footer-server-select {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(201, 162, 39, 0.3);
+  color: rgba(232, 224, 208, 0.65);
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 1.5px;
+  cursor: pointer;
+  outline: none;
+  padding: 0 4px 0 0;
+  appearance: none;
+  -webkit-appearance: none;
+  max-width: 160px;
+}
+
+.footer-server-select option {
+  background: #100a04;
+  color: var(--parchment);
+  letter-spacing: 0;
+}
+
+.footer-server-select:focus {
+  border-bottom-color: var(--gold);
+  color: var(--parchment);
+}
+
+/* ── Settings tabs ────────────────────────────────── */
+.modal-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+}
+
+.modal-tab {
+  padding: 10px 22px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: rgba(232, 224, 208, 0.35);
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+  margin-bottom: -1px;
+}
+
+.modal-tab:hover { color: rgba(232, 224, 208, 0.7); }
+
+.modal-tab.active {
+  color: var(--gold);
+  border-bottom-color: var(--gold);
+}
+
+/* ── Vortex integration ───────────────────────────── */
 
 .vortex-status-row {
   display: flex;

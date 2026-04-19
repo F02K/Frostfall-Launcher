@@ -33,6 +33,7 @@
       </nav>
 
       <div class="topbar-right">
+        <div id="discord-topbar-slot"></div>
         <button class="btn-gear" id="btn-gear" title="Settings">&#9881;</button>
         <button class="win-btn" id="btn-minimize" title="Minimize">&#8722;</button>
         <button class="win-btn" id="btn-maximize" title="Maximize">&#9633;</button>
@@ -101,7 +102,8 @@
         <div class="info-divider"></div>
         <div class="info-item">
           <span class="info-label">SERVER</span>
-          <span class="info-value" id="footer-server-name">ROLEPLAY</span>
+          <span class="info-value" id="footer-server-name">—</span>
+          <select class="footer-server-select" id="footer-server-select" hidden></select>
         </div>
       </div>
       <div class="bottombar-right">
@@ -119,69 +121,80 @@
         <span class="modal-title">&#9881;&nbsp; Settings</span>
         <button class="modal-close" id="modal-close" title="Close">&#10005;</button>
       </div>
+
+      <!-- Tab bar -->
+      <div class="modal-tabs">
+        <button class="modal-tab active" data-tab="general">General</button>
+        <button class="modal-tab" data-tab="vortex">Vortex</button>
+      </div>
+
       <div class="modal-body">
 
-        <!-- Multi-server selector — hidden when only one server is configured -->
-        <div class="settings-group" id="group-server-select" hidden>
-          <label class="setting-label">Server</label>
-          <select class="setting-input setting-select" id="setting-server"></select>
+        <!-- ── General tab ── -->
+        <div class="tab-panel" id="tab-general">
+
+          <div class="settings-group">
+            <label class="setting-label">Skyrim Installation Path</label>
+            <div class="setting-path-row">
+              <input class="setting-input" id="setting-skyrim-path" type="text"
+                     placeholder="C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition" />
+              <button class="btn-browse" id="btn-browse">Browse…</button>
+            </div>
+          </div>
+
         </div>
 
-        <div class="settings-group">
-          <label class="setting-label">Skyrim Installation Path</label>
-          <div class="setting-path-row">
-            <input class="setting-input" id="setting-skyrim-path" type="text"
-                   placeholder="C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition" />
-            <button class="btn-browse" id="btn-browse">Browse…</button>
-          </div>
-        </div>
-        <div class="settings-group">
-          <label class="setting-label">Character Name</label>
-          <input class="setting-input" id="setting-username" type="text"
-                 placeholder="Your character name" />
-        </div>
-        <!-- Discord login -->
-        <div class="settings-group settings-group--discord">
-          <label class="setting-label">Discord Account</label>
-          <div class="discord-auth-row" id="discord-auth-row">
-            <!-- populated by renderer.js -->
-          </div>
-        </div>
+        <!-- ── Vortex tab ── -->
+        <div class="tab-panel" id="tab-vortex" hidden>
 
-        <!-- Vortex integration -->
-        <div class="settings-group settings-group--vortex">
-          <label class="setting-label">Vortex Mod Manager</label>
-          <div class="vortex-status-row" id="vortex-status-row">
-            <span class="vortex-status-dot" id="vortex-status-dot"></span>
-            <span class="vortex-status-text" id="vortex-status-text">Not configured</span>
+          <div class="settings-group">
+            <label class="setting-label">Vortex Mod Manager</label>
+            <div class="vortex-status-row" id="vortex-status-row">
+              <span class="vortex-status-dot" id="vortex-status-dot"></span>
+              <span class="vortex-status-text" id="vortex-status-text">Not configured</span>
+            </div>
+            <div class="setting-path-row">
+              <input class="setting-input" id="setting-vortex-path" type="text"
+                     placeholder="Path to Vortex.exe" />
+              <button class="btn-browse" id="btn-browse-vortex">Browse…</button>
+            </div>
+            <button class="btn-detect-vortex" id="btn-detect-vortex">Auto-detect Vortex</button>
           </div>
-          <div class="setting-path-row">
-            <input class="setting-input" id="setting-vortex-path" type="text"
-                   placeholder="Path to Vortex.exe" />
-            <button class="btn-browse" id="btn-browse-vortex">Browse…</button>
+
+          <div class="settings-group">
+            <label class="setting-label">Profile</label>
+            <div class="vortex-profile-row">
+              <select class="setting-input setting-select" id="setting-vortex-profile">
+                <option value="">— select profile —</option>
+              </select>
+              <button class="btn-icon" id="btn-refresh-profiles" title="Refresh profile list">&#8635;</button>
+              <button class="btn-icon" id="btn-open-profiles" title="Open profiles folder in Explorer">&#128193;</button>
+            </div>
           </div>
-          <button class="btn-detect-vortex" id="btn-detect-vortex">Auto-detect Vortex</button>
-          <div class="vortex-profile-row">
-            <label class="setting-label-sm">Profile</label>
-            <select class="setting-input setting-select" id="setting-vortex-profile">
-              <option value="">— select profile —</option>
-            </select>
-            <button class="btn-icon" id="btn-refresh-profiles" title="Refresh profile list">&#8635;</button>
-            <button class="btn-icon" id="btn-open-profiles" title="Open profiles folder in Explorer">&#128193;</button>
+
+          <div class="settings-group">
+            <label class="setting-label">Staging Folder</label>
+            <div class="setting-path-row" id="vortex-staging-row">
+              <input class="setting-input" id="setting-vortex-staging" type="text"
+                     placeholder="Leave empty to use Vortex default" />
+              <button class="btn-browse" id="btn-browse-staging">Browse…</button>
+            </div>
           </div>
-          <div class="setting-path-row" id="vortex-staging-row">
-            <input class="setting-input" id="setting-vortex-staging" type="text"
-                   placeholder="Staging folder (leave empty for Vortex default)" />
-            <button class="btn-browse" id="btn-browse-staging">Browse…</button>
+
+          <div class="settings-group">
+            <label class="setting-label">Nexus API Key</label>
+            <input class="setting-input" id="setting-nexus-api-key" type="password"
+                   placeholder="Optional — enables auto-queue of missing mods" />
           </div>
-          <input class="setting-input" id="setting-nexus-api-key" type="password"
-                 placeholder="Nexus API key (optional — enables auto-queue of missing mods)" />
+
           <label class="setting-checkbox-row" id="vortex-enable-row">
             <input type="checkbox" id="setting-vortex-enabled" />
             <span>Enable Vortex integration — install &amp; deploy via profile</span>
           </label>
+
         </div>
 
+        <!-- ── Actions (always visible) ── -->
         <div class="modal-actions">
           <div class="install-status" id="install-status"></div>
           <button class="btn-install" id="btn-install">Install / Update Files</button>

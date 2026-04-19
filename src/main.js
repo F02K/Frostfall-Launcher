@@ -133,7 +133,7 @@ ipcMain.handle('settings:load', async () => {
   }
 })
 ipcMain.handle('settings:save', (_e, data) => {
-  const allowed = ['skyrimPath', 'username', 'activeServerIndex',
+  const allowed = ['skyrimPath', 'activeServerIndex',
                    'vortexPath', 'vortexProfileId', 'vortexEnabled', 'vortexStagingPath',
                    'nexusApiKey']
   const clean = {}
@@ -641,48 +641,40 @@ async function runVortexInstall(profileId) {
   )
 
   try {
-    // ── 1. FORCE install ALL Nexus mods ───────────────────────────────────────
+    // ── 1. Open collection in Vortex ──────────────────────────────────────────
     try {
       const modlistData = await fetchJSON(`${config.apiUrl}/api/modlist`)
       const vortexExe   = store.get('vortexPath')
-      const apiKey      = store.get('nexusApiKey') || ''
-
-      let vortexStarted = false
 
       if (Array.isArray(modlistData)) {
-        for (const mod of modlistData) {
-          if (mod.source !== 'nexus' || !mod.nexusId) continue
-
-          const fileId =
-            mod.fileId ??
-            (apiKey ? await fetchNexusFileId(mod.nexusId, apiKey) : null)
-
-          // Ensure Vortex is running once
-          if (!vortexStarted && vortexExe && fs.existsSync(vortexExe)) {
+        const collection = modlistData.find(m => m.source === 'collection')
+        if (collection?.collectionSlug) {
+          // Ensure Vortex is running before opening the NXM link
+          if (vortexExe && fs.existsSync(vortexExe)) {
             spawn(vortexExe, ['--game', 'skyrimse'], {
               detached: true,
               stdio: 'ignore',
             }).unref()
-
             await new Promise(r => setTimeout(r, 1500))
-            vortexStarted = true
           }
 
-          if (fileId) {
+          if (collection.revisionId) {
             shell.openExternal(
-              `nxm://skyrimspecialedition/mods/${mod.nexusId}/files/${fileId}`
+              `nxm://skyrimspecialedition/collections/${collection.collectionSlug}/revisions/${collection.revisionId}`
             )
-            log(`[vortex-install] FORCE install ${mod.name} (${mod.nexusId}/${fileId})`)
+            log(`[vortex-install] opened collection ${collection.collectionSlug} rev ${collection.revisionId}`)
           } else {
             shell.openExternal(
-              `https://www.nexusmods.com/skyrimspecialedition/mods/${mod.nexusId}?tab=files`
+              `https://www.nexusmods.com/skyrimspecialedition/collections/${collection.collectionSlug}`
             )
-            log(`[vortex-install] ${mod.name} opened Nexus page (no fileId)`)
+            log(`[vortex-install] opened collection page (no revisionId): ${collection.collectionSlug}`)
           }
+        } else {
+          log('[vortex-install] no collection entry in modlist — skipping collection open')
         }
       }
     } catch {
-      log('[vortex-install] could not fetch modlist, skipping Nexus mod sync')
+      log('[vortex-install] could not fetch modlist, skipping collection sync')
     }
 
     // ── 2. Backend file handling (UNCHANGED) ──────────────────────────────────
