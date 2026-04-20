@@ -184,8 +184,10 @@ ipcMain.handle('api:serverinfo', async () => {
 ipcMain.handle('discord:getUser', () => store.get('discordUser') || null)
 
 ipcMain.handle('discord:logout', () => {
-  store.set('discordUser',  null)
-  store.set('discordToken', null)
+  store.set('discordUser',   null)
+  store.set('discordToken',  null)
+  store.set('gameProfileId', null)
+  store.set('gameSession',   null)
   return { success: true }
 })
 
@@ -282,6 +284,7 @@ ipcMain.handle('discord:login', async () => {
           try {
             const sd = await postJSON(`${config.apiUrl}/auth/session`, { discordUser: data.user })
             if (sd.profileId != null) store.set('gameProfileId', sd.profileId)
+            if (sd.session   != null) store.set('gameSession',   sd.session)
           } catch { /* non-fatal — profileId will default to 1 */ }
 
           resolve({ success: true, user: data.user })
@@ -817,9 +820,11 @@ function writeClientSettings(destPath, srv, serverInfo) {
     settings['server-master-key'] = null
     settings['gameData']          = { profileId: profileId ?? 1 }
   } else {
-    // Online mode — no gameData; SkyMP client handles auth in-game.
-    settings['master']            = serverInfo?.masterUrl  || ''
-    settings['server-master-key'] = serverInfo?.masterKey  || null
+    settings['master']            = serverInfo?.masterUrl || ''
+    settings['server-master-key'] = serverInfo?.masterKey || null
+    // Attach the Frostfall session so the TS server can validate it against the backend.
+    const session = store.get('gameSession')
+    if (session) settings['gameData'] = { session }
   }
 
   fs.mkdirSync(path.dirname(destPath), { recursive: true })

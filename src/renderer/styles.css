@@ -880,6 +880,10 @@ html, body {
   color: rgba(88, 101, 242, 0.8);
 }
 
+.sinfo-locked {
+  color: rgba(220, 60, 60, 0.9);
+}
+
 /* ── Metrics modal ────────────────────────────────── */
 .modal-box--wide {
   width: 680px;

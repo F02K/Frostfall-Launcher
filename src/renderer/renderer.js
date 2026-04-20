@@ -60,6 +60,7 @@ const vortexStatusText   = document.getElementById('vortex-status-text')
 // ── Discord auth state (kept in module scope for PLAY check) ──────────────────
 let discordUser         = null
 let discordAuthRequired = false
+let serverLocked        = false
 
 // ── Load / save settings ──────────────────────────────────────────────────────
 async function loadSettings() {
@@ -343,6 +344,12 @@ window.electronAPI.onLaunchDeploying(() => {
 })
 
 btnConnect.addEventListener('click', async () => {
+  if (serverLocked) {
+    connectWarning.textContent = 'Server is currently locked.'
+    connectWarning.classList.add('visible')
+    return
+  }
+
   const s = await window.electronAPI.loadSettings()
   if (!s.skyrimPath) {
     connectWarning.textContent = 'Set Skyrim path in Settings first.'
@@ -429,13 +436,15 @@ async function loadServerInfo() {
   const info = await window.electronAPI.fetchServerInfo()
   if (!info || info.error) return
 
-  const strip    = document.getElementById('server-info-strip')
-  const nameEl   = document.getElementById('sinfo-name')
-  const capEl    = document.getElementById('sinfo-capacity')
-  const modeEl   = document.getElementById('sinfo-mode')
-  const modeSep  = document.getElementById('sinfo-mode-sep')
-  const discEl   = document.getElementById('sinfo-discord')
-  const discSep  = document.getElementById('sinfo-discord-sep')
+  const strip      = document.getElementById('server-info-strip')
+  const nameEl     = document.getElementById('sinfo-name')
+  const capEl      = document.getElementById('sinfo-capacity')
+  const modeEl     = document.getElementById('sinfo-mode')
+  const modeSep    = document.getElementById('sinfo-mode-sep')
+  const discEl     = document.getElementById('sinfo-discord')
+  const discSep    = document.getElementById('sinfo-discord-sep')
+  const lockEl     = document.getElementById('sinfo-locked')
+  const lockSep    = document.getElementById('sinfo-locked-sep')
   const footerName = document.getElementById('footer-server-name')
 
   nameEl.textContent = info.name
@@ -452,6 +461,16 @@ async function loadServerInfo() {
     discordAuthRequired = true
     discEl.hidden  = false
     discSep.hidden = false
+  }
+
+  if (info.locked) {
+    serverLocked       = true
+    lockEl.hidden      = false
+    lockSep.hidden     = false
+    btnConnect.disabled    = true
+    btnConnect.title       = 'This server is currently locked to the public.'
+    connectWarning.textContent = 'Server is currently locked.'
+    connectWarning.classList.add('visible')
   }
 
   strip.hidden = false
