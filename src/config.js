@@ -8,5 +8,5 @@
  *           at runtime so they never need a launcher rebuild to update.
  */
 module.exports = {
-  apiUrl: process.env.API_URL || 'http://127.0.0.1:4000',
+  apiUrl: process.env.API_URL || 'https://api.frostfall.online',
 }

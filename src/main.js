@@ -448,13 +448,21 @@ ipcMain.handle('launch:skse', async () => {
 
 let installing = false
 
-ipcMain.on('install:start', () => {
+ipcMain.on('install:start', (_e, mode) => {
   if (installing) return
   installing = true
 
-  const vortexEnabled   = store.get('vortexEnabled')
   const vortexProfileId = store.get('vortexProfileId')
-  const fn = vortexEnabled ? runVortexInstall(vortexProfileId) : runDirectInstall()
+  let fn
+  if (mode === 'client') {
+    fn = runDirectInstall()
+  } else if (mode === 'vortex') {
+    fn = runVortexInstall(vortexProfileId)
+  } else {
+    // Auto mode (used by the Play button) — delegate based on vortexEnabled setting
+    const vortexEnabled = store.get('vortexEnabled')
+    fn = vortexEnabled ? runVortexInstall(vortexProfileId) : runDirectInstall()
+  }
   fn.catch(err => {
     log('[install] Unhandled error:', err.message)
     send('install:complete', { success: false, error: `Unexpected error: ${err.message}` })

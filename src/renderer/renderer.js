@@ -38,7 +38,6 @@ document.querySelectorAll('.modal-tab').forEach(tab => {
 
 // ── Form fields ───────────────────────────────────────────────────────────────
 const fieldSkyrimPath   = document.getElementById('setting-skyrim-path')
-const installStatus     = document.getElementById('install-status')
 
 // ── Footer server selector ────────────────────────────────────────────────────
 const footerServerName   = document.getElementById('footer-server-name')
@@ -61,6 +60,23 @@ const vortexStatusText   = document.getElementById('vortex-status-text')
 let discordUser         = null
 let discordAuthRequired = false
 let serverLocked        = false
+let lockedAllowList     = []
+
+// Re-evaluates Play button state whenever lock state or Discord user changes.
+function updateLockState() {
+  const userAllowed = serverLocked && discordUser && lockedAllowList.includes(discordUser.id)
+  if (serverLocked && !userAllowed) {
+    btnConnect.disabled = true
+    btnConnect.title    = 'This server is currently locked to the public.'
+    connectWarning.textContent = 'Server is currently locked.'
+    connectWarning.classList.add('visible')
+  } else if (serverLocked && userAllowed) {
+    btnConnect.disabled = false
+    btnConnect.title    = ''
+    connectWarning.classList.remove('visible')
+    connectWarning.textContent = ''
+  }
+}
 
 // ── Load / save settings ──────────────────────────────────────────────────────
 async function loadSettings() {
@@ -140,6 +156,7 @@ function renderTopbarDiscord() {
       await window.electronAPI.discordLogout()
       discordUser = null
       renderTopbarDiscord()
+      updateLockState()
     })
     wrap.appendChild(logoutBtn)
 
@@ -155,6 +172,7 @@ function renderTopbarDiscord() {
       if (result.success) {
         discordUser = result.user
         renderTopbarDiscord()
+        updateLockState()
       } else {
         loginBtn.disabled    = false
         loginBtn.textContent = 'Discord Login'
@@ -290,30 +308,62 @@ document.getElementById('btn-open-profiles').addEventListener('click', () => {
 fieldVortexEnabled.addEventListener('change', updateVortexStatus)
 fieldVortexProfile.addEventListener('change', updateVortexStatus)
 
-// ── Install / Update Files ────────────────────────────────────────────────────
-document.getElementById('btn-install').addEventListener('click', () => {
-  installStatus.textContent = 'Starting install…'
+// ── Install / Update Client Files ────────────────────────────────────────────
+const installStatusClient = document.getElementById('install-status-client')
+
+document.getElementById('btn-install-client').addEventListener('click', () => {
+  installStatusClient.textContent = 'Starting install…'
   window.electronAPI.removeInstallListeners()
 
   window.electronAPI.onInstallProgress(({ phase, file, index, total, skipped }) => {
     if (phase === 'download') {
-      installStatus.textContent = file
-    } else if (phase === 'deploy') {
-      installStatus.textContent = `[deploy ${index}/${total}] ${file}`
+      installStatusClient.textContent = file
     } else {
       const prefix = skipped ? '[skip]' : `[${index}/${total}]`
-      installStatus.textContent = `${prefix} ${file}`
+      installStatusClient.textContent = `${prefix} ${file}`
+    }
+  })
+
+  window.electronAPI.onInstallComplete(({ success, error, skseWarning, upToDate }) => {
+    if (!success) {
+      installStatusClient.textContent = `Error: ${error}`
+      return
+    }
+    if (skseWarning) {
+      installStatusClient.textContent = `Done — ⚠ ${skseWarning}`
+      return
+    }
+    installStatusClient.textContent = upToDate ? 'Client files up to date ✓' : 'Install complete! SKSE ✓'
+  })
+
+  window.electronAPI.startInstall('client')
+})
+
+// ── Install Modpack via Vortex ────────────────────────────────────────────────
+const installStatusVortex = document.getElementById('install-status-vortex')
+
+document.getElementById('btn-install-vortex').addEventListener('click', () => {
+  installStatusVortex.textContent = 'Starting Vortex install…'
+  window.electronAPI.removeInstallListeners()
+
+  window.electronAPI.onInstallProgress(({ phase, file, index, total, skipped }) => {
+    if (phase === 'download') {
+      installStatusVortex.textContent = file
+    } else if (phase === 'deploy') {
+      installStatusVortex.textContent = `[deploy ${index}/${total}] ${file}`
+    } else {
+      const prefix = skipped ? '[skip]' : `[${index}/${total}]`
+      installStatusVortex.textContent = `${prefix} ${file}`
     }
   })
 
   window.electronAPI.onInstallComplete(({ success, error, skseWarning, upToDate, vortex: usedVortex }) => {
     if (!success) {
-      installStatus.textContent = `Error: ${error}`
+      installStatusVortex.textContent = `Error: ${error}`
       return
     }
-
     if (skseWarning) {
-      installStatus.textContent = `Done — ⚠ ${skseWarning}`
+      installStatusVortex.textContent = `Done — ⚠ ${skseWarning}`
       return
     }
 
@@ -321,30 +371,26 @@ document.getElementById('btn-install').addEventListener('click', () => {
       ? 'Server files up to date'
       : (usedVortex ? 'Staged & deployed via Vortex' : 'Install complete')
 
-    // Warn about any required Nexus mods — those must be installed manually via Vortex.
     const missingNexus = currentModlist.filter(m => m.source === 'nexus' && m.required && m.enabled)
     if (missingNexus.length > 0) {
       const names = missingNexus.map(m => m.name).join(', ')
-      installStatus.textContent = `${prefix}. Install these via Vortex: ${names}`
+      installStatusVortex.textContent = `${prefix}. Install these via Vortex: ${names}`
     } else {
-      installStatus.textContent = `${prefix}! SKSE ✓`
+      installStatusVortex.textContent = `${prefix}! SKSE ✓`
     }
   })
 
-  window.electronAPI.startInstall()
+  window.electronAPI.startInstall('vortex')
 })
 
 // ── PLAY button ───────────────────────────────────────────────────────────────
 const btnConnect     = document.getElementById('btn-connect')
 const connectWarning = document.getElementById('connect-warning')
 
-window.electronAPI.onLaunchDeploying(() => {
-  btnConnect.disabled     = true
-  btnConnect.textContent  = 'Deploying…'
-})
 
 btnConnect.addEventListener('click', async () => {
-  if (serverLocked) {
+  const userAllowed = discordUser && lockedAllowList.includes(discordUser.id)
+  if (serverLocked && !userAllowed) {
     connectWarning.textContent = 'Server is currently locked.'
     connectWarning.classList.add('visible')
     return
@@ -364,48 +410,21 @@ btnConnect.addEventListener('click', async () => {
   }
 
   btnConnect.disabled    = true
-  btnConnect.textContent = 'Updating…'
+  btnConnect.textContent = 'Launching…'
   connectWarning.classList.remove('visible')
 
-  // Step 1: Install / update client files before launching
-  window.electronAPI.removeInstallListeners()
+  const result = await window.electronAPI.launchSkse()
 
-  await new Promise(resolve => {
-    window.electronAPI.onInstallProgress(({ phase }) => {
-      btnConnect.textContent = phase === 'download' ? 'Downloading…' : 'Installing…'
-    })
+  if (!result.success) {
+    connectWarning.textContent = result.error
+    connectWarning.classList.add('visible')
+  } else {
+    connectWarning.classList.remove('visible')
+    connectWarning.textContent = ''
+  }
 
-    window.electronAPI.onInstallComplete(async ({ success, error }) => {
-      window.electronAPI.removeInstallListeners()
-
-      if (!success) {
-        connectWarning.textContent = error
-        connectWarning.classList.add('visible')
-        btnConnect.disabled    = false
-        btnConnect.textContent = 'PLAY'
-        resolve()
-        return
-      }
-
-      // Step 2: Launch the game
-      btnConnect.textContent = 'Launching…'
-      const result = await window.electronAPI.launchSkse()
-
-      if (!result.success) {
-        connectWarning.textContent = result.error
-        connectWarning.classList.add('visible')
-      } else {
-        connectWarning.classList.remove('visible')
-        connectWarning.textContent = ''
-      }
-
-      btnConnect.disabled    = false
-      btnConnect.textContent = 'PLAY'
-      resolve()
-    })
-
-    window.electronAPI.startInstall()
-  })
+  btnConnect.disabled    = false
+  btnConnect.textContent = '&#9654; PLAY'
 })
 
 // ── Server status ─────────────────────────────────────────────────────────────
@@ -463,15 +482,17 @@ async function loadServerInfo() {
     discSep.hidden = false
   }
 
-  if (info.locked) {
-    serverLocked       = true
-    lockEl.hidden      = false
-    lockSep.hidden     = false
-    btnConnect.disabled    = true
-    btnConnect.title       = 'This server is currently locked to the public.'
-    connectWarning.textContent = 'Server is currently locked.'
-    connectWarning.classList.add('visible')
+  if (info.lockedAllowList) {
+    lockedAllowList = info.lockedAllowList
   }
+
+  if (info.locked) {
+    serverLocked   = true
+    lockEl.hidden  = false
+    lockSep.hidden = false
+  }
+
+  updateLockState()
 
   strip.hidden = false
 }

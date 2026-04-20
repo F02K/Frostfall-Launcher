@@ -33,11 +33,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openExternal: (url) => ipcRenderer.send('open:external', url),
 
   // SKSE launch
-  launchSkse:        ()   => ipcRenderer.invoke('launch:skse'),
-  onLaunchDeploying: (cb) => ipcRenderer.on('launch:deploying', cb),
+  launchSkse: () => ipcRenderer.invoke('launch:skse'),
 
   // File install
-  startInstall: () => ipcRenderer.send('install:start'),
+  startInstall: (mode) => ipcRenderer.send('install:start', mode),
   onInstallProgress: (cb) =>
     ipcRenderer.on('install:progress', (_e, data) => cb(data)),
   onInstallComplete: (cb) =>

@@ -791,10 +791,21 @@ html, body {
 
 .btn-browse:hover { border-color: var(--glass-border-bright); color: var(--parchment); }
 
+.tab-actions {
+  margin-top: 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 14px;
+  border-top: 1px solid var(--glass-border);
+}
+
 .modal-actions {
   margin-top: 24px;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 12px;
   flex-wrap: wrap;
   padding-top: 18px;
