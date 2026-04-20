@@ -134,8 +134,7 @@ ipcMain.handle('settings:load', async () => {
 })
 ipcMain.handle('settings:save', (_e, data) => {
   const allowed = ['skyrimPath', 'activeServerIndex',
-                   'vortexPath', 'vortexProfileId', 'vortexEnabled', 'vortexStagingPath',
-                   'nexusApiKey']
+                   'vortexPath', 'vortexProfileId', 'vortexEnabled']
   const clean = {}
   for (const k of allowed) if (k in data) clean[k] = data[k]
   store.set(clean)
@@ -396,13 +395,13 @@ const REQUIRED_FILES = [
   path.join('Data', 'Platform', 'Plugins', 'skymp5-client.js'),
   path.join('Data', 'SKSE', 'Plugins', 'SkyrimPlatform.dll'),
   path.join('Data', 'SKSE', 'Plugins', 'MpClientPlugin.dll'),
-  'skse64_loader.exe',
 ]
 
 ipcMain.handle('launch:skse', async () => {
   const skyrimPath      = store.get('skyrimPath')
   const vortexEnabled   = store.get('vortexEnabled')
   const vortexProfileId = store.get('vortexProfileId')
+  const vortexPath      = store.get('vortexPath')
 
   if (!skyrimPath) {
     return { success: false, error: 'Skyrim path not configured.' }
@@ -412,7 +411,55 @@ ipcMain.handle('launch:skse', async () => {
     if (!vortexProfileId) {
       return { success: false, error: 'No Vortex profile selected — open Settings and choose a profile.' }
     }
+    if (!vortexPath || !fs.existsSync(vortexPath)) {
+      return { success: false, error: 'Vortex.exe not found — open Settings and re-detect Vortex.' }
+    }
+
+    // Re-write client settings before launch so server-ip/port/gameData are current.
+    const srv = activeServer()
+    if (srv) {
+      try {
+        const serverInfo = await fetchJSON(`${config.apiUrl}/api/serverinfo`)
+        const settingsPath = path.join(skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt')
+        writeClientSettings(settingsPath, srv, serverInfo)
+        log('[launch] client settings written')
+      } catch { /* non-fatal */ }
+    }
+
+    // Step 1: spawn Vortex with the profile ID — Vortex switches to that profile on
+    // startup which triggers an automatic mod deployment.  --start-minimized keeps it
+    // in the system tray so the user doesn't see a Vortex window mid-launch.
+    // (There is no Vortex CLI flag to deploy or launch a game; the profile switch is
+    //  the only supported way to trigger deployment from outside Vortex.)
+    log(`[launch] deploying via Vortex profile ${vortexProfileId}…`)
+    spawn(vortexPath, ['--profile', vortexProfileId, '--start-minimized'], {
+      detached: true,
+      stdio: 'ignore',
+    }).unref()
+
+    // Step 2: wait 5 seconds for Vortex to finish deploying mods via hardlinks.
+    await new Promise(r => setTimeout(r, 5000))
+    log('[launch] 5 s elapsed — launching SKSE')
+
+    // Step 3: launch the game directly.  Vortex uses hardlinks/symlinks so the mod
+    // files are already in place in the Skyrim directory — Vortex does not need to
+    // be involved at game-start time.
+    const missingFiles = REQUIRED_FILES.filter(f => !fs.existsSync(path.join(skyrimPath, f)))
+    if (missingFiles.length > 0) {
+      const names = missingFiles.map(f => path.basename(f)).join(', ')
+      return { success: false, error: `Files missing after deploy — run "Install Modpack via Vortex" first.\nMissing: ${names}` }
+    }
+
+    try {
+      const exe = path.join(skyrimPath, 'skse64_loader.exe')
+      spawn(exe, [], { detached: true, stdio: 'ignore', cwd: skyrimPath }).unref()
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err.message }
+    }
   }
+
+  // ── Non-Vortex path: direct SKSE launch ──────────────────────────────────────
 
   // Re-write client settings before launch so server-ip/port/gameData are current.
   const srv = activeServer()
@@ -429,10 +476,7 @@ ipcMain.handle('launch:skse', async () => {
   const missingFiles = REQUIRED_FILES.filter(f => !fs.existsSync(path.join(skyrimPath, f)))
   if (missingFiles.length > 0) {
     const names = missingFiles.map(f => path.basename(f)).join(', ')
-    const hint  = vortexEnabled
-      ? `Run "Deploy Mods" in Vortex, then try again.\nMissing: ${names}`
-      : `Run Install first.\nMissing: ${names}`
-    return { success: false, error: `Files missing — ${hint}` }
+    return { success: false, error: `Files missing — Run Install first.\nMissing: ${names}` }
   }
 
   const exe = path.join(skyrimPath, 'skse64_loader.exe')
@@ -565,8 +609,7 @@ async function runDirectInstall() {
       if (!allPresent) return abort('Backend unreachable and client files are not installed. Check your connection.')
       log('[install] Backend unreachable - files already installed, updating settings only')
       writeClientSettings(clientSettingsPath, srv, serverInfo)
-      const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
-      send('install:complete', { success: true, skseOk, upToDate: true })
+      send('install:complete', { success: true, upToDate: true })
       return
     }
 
@@ -576,8 +619,7 @@ async function runDirectInstall() {
     if (!needsDownload) {
       log('[install] Files up to date, updating settings only')
       writeClientSettings(clientSettingsPath, srv, serverInfo)
-      const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
-      send('install:complete', { success: true, skseOk, upToDate: true })
+      send('install:complete', { success: true, upToDate: true })
       return
     }
 
@@ -606,13 +648,7 @@ async function runDirectInstall() {
 
     store.set('filesVersion', serverVersion)
 
-    // ── 5. Verify SKSE ───────────────────────────────────────────────────────
-    const skseOk = fs.existsSync(path.join(skyrimPath, 'skse64_loader.exe'))
-    log('[install] skseOk:', skseOk)
-    send('install:complete', {
-      success: true, skseOk,
-      skseWarning: skseOk ? null : 'skse64_loader.exe was not found after install.',
-    })
+    send('install:complete', { success: true })
   } catch (err) {
     abort(`Install failed: ${err.message}`)
   } finally {

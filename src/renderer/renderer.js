@@ -51,8 +51,6 @@ footerServerSelect.addEventListener('change', () => {
 const fieldVortexPath    = document.getElementById('setting-vortex-path')
 const fieldVortexProfile = document.getElementById('setting-vortex-profile')
 const fieldVortexEnabled = document.getElementById('setting-vortex-enabled')
-const fieldVortexStaging = document.getElementById('setting-vortex-staging')
-const fieldNexusApiKey   = document.getElementById('setting-nexus-api-key')
 const vortexStatusDot    = document.getElementById('vortex-status-dot')
 const vortexStatusText   = document.getElementById('vortex-status-text')
 
@@ -110,9 +108,7 @@ async function loadSettings() {
   }
 
   // Restore Vortex settings
-  fieldVortexPath.value      = s.vortexPath        || ''
-  fieldVortexStaging.value   = s.vortexStagingPath  || ''
-  fieldNexusApiKey.value     = s.nexusApiKey         || ''
+  fieldVortexPath.value      = s.vortexPath || ''
   fieldVortexEnabled.checked = !!s.vortexEnabled
   await refreshVortexProfiles(s.vortexProfileId || '')
   updateVortexStatus()
@@ -191,12 +187,10 @@ document.getElementById('btn-save').addEventListener('click', async () => {
   const profileId = fieldVortexProfile.value.trim()
 
   const data = {
-    skyrimPath:        fieldSkyrimPath.value.trim(),
-    vortexPath:        fieldVortexPath.value.trim(),
-    vortexStagingPath: fieldVortexStaging.value.trim(),
-    nexusApiKey:       fieldNexusApiKey.value.trim(),
-    vortexProfileId:   profileId,
-    vortexEnabled:     fieldVortexEnabled.checked,
+    skyrimPath:      fieldSkyrimPath.value.trim(),
+    vortexPath:      fieldVortexPath.value.trim(),
+    vortexProfileId: profileId,
+    vortexEnabled:   fieldVortexEnabled.checked,
   }
 
   // Tag the profile with its display name so we can show it on future loads
@@ -223,13 +217,23 @@ document.getElementById('btn-browse').addEventListener('click', async () => {
 
 // ── Vortex UI ─────────────────────────────────────────────────────────────────
 
+const FROSTFALL_PROFILE_NAME = 'frostfall server collection'
+
 async function refreshVortexProfiles(selectId) {
-  const profiles = await window.electronAPI.vortexListProfiles()
+  const allProfiles = await window.electronAPI.vortexListProfiles()
+
+  // Only show profiles belonging to the Frostfall Server Collection
+  const profiles = allProfiles.filter(p =>
+    p.name.toLowerCase().includes(FROSTFALL_PROFILE_NAME)
+  )
 
   // Preserve current selection if no explicit id given
   const currentVal = selectId !== undefined ? selectId : fieldVortexProfile.value
 
-  fieldVortexProfile.innerHTML = '<option value="">— select profile —</option>'
+  fieldVortexProfile.innerHTML = profiles.length === 0
+    ? '<option value="">— no Frostfall Server Collection profile found —</option>'
+    : '<option value="">— select profile —</option>'
+
   profiles.forEach(p => {
     const opt = document.createElement('option')
     opt.value       = p.id
@@ -237,6 +241,11 @@ async function refreshVortexProfiles(selectId) {
     opt.selected    = p.id === currentVal
     fieldVortexProfile.appendChild(opt)
   })
+
+  // Auto-select if there is exactly one matching profile and none is saved yet
+  if (profiles.length === 1 && !currentVal) {
+    fieldVortexProfile.value = profiles[0].id
+  }
 }
 
 function updateVortexStatus() {
@@ -288,14 +297,6 @@ document.getElementById('btn-browse-vortex').addEventListener('click', async () 
   }
 })
 
-document.getElementById('btn-browse-staging').addEventListener('click', async () => {
-  const result = await window.electronAPI.openFolder()
-  if (result) {
-    fieldVortexStaging.value = result
-    updateVortexStatus()
-  }
-})
-
 document.getElementById('btn-refresh-profiles').addEventListener('click', async () => {
   await refreshVortexProfiles()
   updateVortexStatus()
@@ -324,16 +325,12 @@ document.getElementById('btn-install-client').addEventListener('click', () => {
     }
   })
 
-  window.electronAPI.onInstallComplete(({ success, error, skseWarning, upToDate }) => {
+  window.electronAPI.onInstallComplete(({ success, error, upToDate }) => {
     if (!success) {
       installStatusClient.textContent = `Error: ${error}`
       return
     }
-    if (skseWarning) {
-      installStatusClient.textContent = `Done — ⚠ ${skseWarning}`
-      return
-    }
-    installStatusClient.textContent = upToDate ? 'Client files up to date ✓' : 'Install complete! SKSE ✓'
+    installStatusClient.textContent = upToDate ? 'Client files up to date ✓' : 'Client files installed ✓'
   })
 
   window.electronAPI.startInstall('client')
@@ -376,7 +373,7 @@ document.getElementById('btn-install-vortex').addEventListener('click', () => {
       const names = missingNexus.map(m => m.name).join(', ')
       installStatusVortex.textContent = `${prefix}. Install these via Vortex: ${names}`
     } else {
-      installStatusVortex.textContent = `${prefix}! SKSE ✓`
+      installStatusVortex.textContent = `${prefix}! ✓`
     }
   })
 
@@ -410,7 +407,7 @@ btnConnect.addEventListener('click', async () => {
   }
 
   btnConnect.disabled    = true
-  btnConnect.textContent = 'Launching…'
+  btnConnect.textContent = 'Deploying…'
   connectWarning.classList.remove('visible')
 
   const result = await window.electronAPI.launchSkse()
@@ -424,7 +421,7 @@ btnConnect.addEventListener('click', async () => {
   }
 
   btnConnect.disabled    = false
-  btnConnect.textContent = '&#9654; PLAY'
+  btnConnect.textContent = '\u25BA PLAY'
 })
 
 // ── Server status ─────────────────────────────────────────────────────────────
