@@ -538,6 +538,15 @@ html, body {
   text-transform: uppercase;
 }
 
+.news-card-desc {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.3px;
+  color: rgba(232, 224, 208, 0.6);
+  line-height: 1.5;
+}
+
 .news-card-date {
   font-family: 'Barlow Condensed', sans-serif;
   font-size: 11px;

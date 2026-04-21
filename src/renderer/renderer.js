@@ -557,6 +557,14 @@ function buildNewsCard(item) {
 
   body.appendChild(tag)
   body.appendChild(title)
+
+  if (item.body) {
+    const desc = document.createElement('div')
+    desc.className = 'news-card-desc'
+    desc.textContent = item.body
+    body.appendChild(desc)
+  }
+
   body.appendChild(date)
 
   card.appendChild(imgWrap)
