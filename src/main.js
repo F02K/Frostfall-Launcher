@@ -280,11 +280,10 @@ ipcMain.handle('discord:login', async () => {
 
           // 6. Get (or create) a stable profileId for this Discord user.
           //    Used as gameData.profileId in offline-mode client settings.
-          try {
-            const sd = await postJSON(`${config.apiUrl}/auth/session`, { discordUser: data.user })
-            if (sd.profileId != null) store.set('gameProfileId', sd.profileId)
-            if (sd.session   != null) store.set('gameSession',   sd.session)
-          } catch { /* non-fatal — profileId will default to 1 */ }
+          const sd = await postJSON(`${config.apiUrl}/auth/session`, { discordUser: data.user })
+          if (sd.profileId == null) throw new Error('Backend did not return a profileId')
+          store.set('gameProfileId', sd.profileId)
+          if (sd.session != null) store.set('gameSession', sd.session)
 
           resolve({ success: true, user: data.user })
         })
@@ -418,12 +417,10 @@ ipcMain.handle('launch:skse', async () => {
     // Re-write client settings before launch so server-ip/port/gameData are current.
     const srv = activeServer()
     if (srv) {
-      try {
-        const serverInfo = await fetchJSON(`${config.apiUrl}/api/serverinfo`)
-        const settingsPath = path.join(skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt')
-        writeClientSettings(settingsPath, srv, serverInfo)
-        log('[launch] client settings written')
-      } catch { /* non-fatal */ }
+      const serverInfo = await fetchJSON(`${config.apiUrl}/api/serverinfo`)
+      const settingsPath = path.join(skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt')
+      writeClientSettings(settingsPath, srv, serverInfo)
+      log('[launch] client settings written')
     }
 
     // Step 1: spawn Vortex with the profile ID — Vortex switches to that profile on
@@ -464,12 +461,10 @@ ipcMain.handle('launch:skse', async () => {
   // Re-write client settings before launch so server-ip/port/gameData are current.
   const srv = activeServer()
   if (srv) {
-    try {
-      const serverInfo = await fetchJSON(`${config.apiUrl}/api/serverinfo`)
-      const settingsPath = path.join(skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt')
-      writeClientSettings(settingsPath, srv, serverInfo)
-      log('[launch] client settings written')
-    } catch { /* non-fatal — use previously written settings */ }
+    const serverInfo = await fetchJSON(`${config.apiUrl}/api/serverinfo`)
+    const settingsPath = path.join(skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt')
+    writeClientSettings(settingsPath, srv, serverInfo)
+    log('[launch] client settings written')
   }
 
   // Pre-launch validation
@@ -858,14 +853,14 @@ function writeClientSettings(destPath, srv, serverInfo) {
 
   const offlineMode = serverInfo?.offlineMode ?? true
 
+  settings['master']            = serverInfo?.masterUrl || ''
+  settings['server-master-key'] = serverInfo?.masterKey || null
+
   if (offlineMode) {
     const profileId = store.get('gameProfileId')
-    settings['master']            = ''
-    settings['server-master-key'] = null
-    settings['gameData']          = { profileId: profileId ?? 1 }
+    if (profileId == null) throw new Error('No profileId in store — login with Discord before playing')
+    settings['gameData'] = { profileId }
   } else {
-    settings['master']            = serverInfo?.masterUrl || ''
-    settings['server-master-key'] = serverInfo?.masterKey || null
     // Attach the Frostfall session so the TS server can validate it against the backend.
     const session = store.get('gameSession')
     if (session) settings['gameData'] = { session }
