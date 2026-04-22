@@ -187,6 +187,15 @@ ipcMain.handle('discord:logout', () => {
   store.set('discordToken',  null)
   store.set('gameProfileId', null)
   store.set('gameSession',   null)
+
+  // Clear auth-data-no-load.js so the SkyMP in-game client reverts to showing
+  // its own Discord OAuth dialog (//null is read as null by the SkyMP client).
+  const skyrimPath = store.get('skyrimPath')
+  if (skyrimPath) {
+    const authDataPath = path.join(skyrimPath, 'Data', 'Platform', 'PluginsNoLoad', 'auth-data-no-load.js')
+    try { fs.writeFileSync(authDataPath, '//null') } catch { /* file may not exist yet */ }
+  }
+
   return { success: true }
 })
 
@@ -837,8 +846,10 @@ async function runVortexInstall(profileId) {
  *
  *   Online mode (server offlineMode: false):
  *     { "server-ip": "...", "server-port": N,
- *       "master": "<masterUrl>", "server-master-key": "<masterKey>" }
- *     gameData is absent — the SkyMP client manages auth via in-game browser.
+ *       "master": "<masterUrl>", "server-master-key": "<masterKey>",
+ *       "gameData": { "session": "<token>" } }   ← session token (not used by SkyMP client)
+ *     Also writes PluginsNoLoad/auth-data-no-load.js so the SkyMP in-game client
+ *     finds pre-existing credentials and skips its own Discord OAuth dialog.
  *
  * @param {string} destPath   Absolute path to skymp5-client-settings.txt
  * @param {object} srv        Active server entry { address, port }
@@ -864,6 +875,31 @@ function writeClientSettings(destPath, srv, serverInfo) {
     // Attach the Frostfall session so the TS server can validate it against the backend.
     const session = store.get('gameSession')
     if (session) settings['gameData'] = { session }
+
+    // Write auth-data-no-load.js so the SkyMP in-game client finds pre-existing
+    // credentials and skips its own Discord OAuth dialog.
+    // The SkyMP client reads: {skyrimPath}/Data/Platform/PluginsNoLoad/auth-data-no-load.js
+    // Format: //<RemoteAuthGameData JSON>
+    // Shape:  { session, masterApiId, discordUsername, discordDiscriminator, discordAvatar }
+    const discordUser = store.get('discordUser')
+    const profileId   = store.get('gameProfileId')
+    if (session && discordUser && profileId != null) {
+      const authDataPath = path.join(path.dirname(destPath), '..', 'PluginsNoLoad', 'auth-data-no-load.js')
+      const authData = {
+        session,
+        masterApiId:          profileId,
+        discordUsername:      discordUser.username || discordUser.tag || null,
+        discordDiscriminator: null,
+        discordAvatar:        discordUser.avatar   || null,
+      }
+      try {
+        fs.mkdirSync(path.dirname(authDataPath), { recursive: true })
+        fs.writeFileSync(authDataPath, '//' + JSON.stringify(authData))
+        log('[writeClientSettings] auth-data-no-load.js written for', discordUser.username || profileId)
+      } catch (err) {
+        log('[writeClientSettings] Failed to write auth-data-no-load.js:', err.message)
+      }
+    }
   }
 
   fs.mkdirSync(path.dirname(destPath), { recursive: true })
