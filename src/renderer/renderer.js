@@ -58,17 +58,27 @@ const vortexStatusText   = document.getElementById('vortex-status-text')
 let discordUser         = null
 let discordAuthRequired = false
 let serverLocked        = false
-let lockedAllowList     = []
+// Whether the current user is allowed to join (session-aware: set after login
+// by re-fetching /api/serverinfo with X-Session).  Defaults true so unauthed
+// users are not blocked before they have a chance to log in.
+let serverAllowed       = true
 
-// Re-evaluates Play button state whenever lock state or Discord user changes.
+// Re-evaluates Play button state whenever lock/whitelist state changes.
+// Call this after login, logout, and initial serverinfo load.
 function updateLockState() {
-  const userAllowed = serverLocked && discordUser && lockedAllowList.includes(discordUser.id)
-  if (serverLocked && !userAllowed) {
+  if (serverLocked && discordUser && !serverAllowed) {
+    // Logged in but not on the server lock allow-list
     btnConnect.disabled = true
-    btnConnect.title    = 'This server is currently locked to the public.'
-    connectWarning.textContent = 'Server is currently locked.'
+    btnConnect.title    = 'The server is currently locked.'
+    connectWarning.textContent = 'Server is currently locked — you are not on the allow list.'
     connectWarning.classList.add('visible')
-  } else if (serverLocked && userAllowed) {
+  } else if (!serverLocked && discordUser && !serverAllowed) {
+    // Logged in but not on the whitelist
+    btnConnect.disabled = true
+    btnConnect.title    = 'You are not on the server whitelist.'
+    connectWarning.textContent = 'You are not on the server whitelist.'
+    connectWarning.classList.add('visible')
+  } else {
     btnConnect.disabled = false
     btnConnect.title    = ''
     connectWarning.classList.remove('visible')
@@ -150,7 +160,8 @@ function renderTopbarDiscord() {
     logoutBtn.textContent = '✕'
     logoutBtn.addEventListener('click', async () => {
       await window.electronAPI.discordLogout()
-      discordUser = null
+      discordUser   = null
+      serverAllowed = true  // reset: access unknown until next login
       renderTopbarDiscord()
       updateLockState()
     })
@@ -167,6 +178,10 @@ function renderTopbarDiscord() {
       const result = await window.electronAPI.discordLogin()
       if (result.success) {
         discordUser = result.user
+        // Re-fetch serverinfo now that we have a session — the backend will
+        // evaluate whitelist / lock access and return the correct `allowed` flag.
+        const freshInfo = await window.electronAPI.fetchServerInfo()
+        serverAllowed = freshInfo ? freshInfo.allowed !== false : true
         renderTopbarDiscord()
         updateLockState()
       } else {
@@ -386,9 +401,10 @@ const connectWarning = document.getElementById('connect-warning')
 
 
 btnConnect.addEventListener('click', async () => {
-  const userAllowed = discordUser && lockedAllowList.includes(discordUser.id)
-  if (serverLocked && !userAllowed) {
-    connectWarning.textContent = 'Server is currently locked.'
+  if (discordUser && !serverAllowed) {
+    connectWarning.textContent = serverLocked
+      ? 'Server is currently locked — you are not on the allow list.'
+      : 'You are not on the server whitelist.'
     connectWarning.classList.add('visible')
     return
   }
@@ -479,15 +495,16 @@ async function loadServerInfo() {
     discSep.hidden = false
   }
 
-  if (info.lockedAllowList) {
-    lockedAllowList = info.lockedAllowList
-  }
-
   if (info.locked) {
     serverLocked   = true
     lockEl.hidden  = false
     lockSep.hidden = false
   }
+
+  // `allowed` is session-aware: false only when a session was sent and the
+  // backend rejected it (locked/not whitelisted).  Without a session it
+  // defaults to true — access is re-checked after Discord login.
+  if (info.allowed === false) serverAllowed = false
 
   updateLockState()
 

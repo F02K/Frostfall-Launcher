@@ -173,8 +173,12 @@ ipcMain.handle('api:status', async () => {
 })
 
 // ── Server info ───────────────────────────────────────────────────────────────
+// Include the stored session token so the backend's session-aware `allowed`
+// field reflects whether this user is on the whitelist / server lock list.
 ipcMain.handle('api:serverinfo', async () => {
-  try { return await fetchJSON(`${config.apiUrl}/api/serverinfo`) }
+  const session = store.get('gameSession')
+  const headers = session ? { 'x-session': session } : {}
+  try { return await fetchJSON(`${config.apiUrl}/api/serverinfo`, headers) }
   catch { return null }
 })
 
@@ -987,10 +991,18 @@ function postJSON(url, body) {
   })
 }
 
-function fetchJSON(url) {
+function fetchJSON(url, headers = {}) {
   return new Promise((resolve, reject) => {
-    const mod = url.startsWith('https') ? https : http
-    const req = mod.get(url, res => {
+    const mod    = url.startsWith('https') ? https : http
+    const urlObj = new URL(url)
+    const opts   = {
+      hostname: urlObj.hostname,
+      port:     urlObj.port || (url.startsWith('https') ? 443 : 80),
+      path:     urlObj.pathname + urlObj.search,
+      method:   'GET',
+      headers,
+    }
+    const req = mod.request(opts, res => {
       if (res.statusCode < 200 || res.statusCode >= 300) {
         res.resume()
         const e = new Error(`HTTP ${res.statusCode} from ${url}`)
@@ -1010,6 +1022,7 @@ function fetchJSON(url) {
       req.destroy()
       reject(new Error(`Request timed out: ${url}`))
     })
+    req.end()
   })
 }
 
