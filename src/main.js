@@ -597,7 +597,7 @@ async function runDirectInstall() {
   const tempZip = path.join(os.tmpdir(), 'frostfall-client.zip')
 
   // Fetch serverinfo once so writeClientSettings knows offline vs online mode.
-  let serverInfo = { offlineMode: true }
+  let serverInfo = null
   try { serverInfo = await fetchJSON(`${config.apiUrl}/api/serverinfo`) } catch {}
 
   const clientSettingsPath = path.join(skyrimPath, 'Data', 'Platform', 'Plugins', 'skymp5-client-settings.txt')
@@ -684,7 +684,7 @@ async function runVortexInstall(profileId) {
   const tempZip = path.join(os.tmpdir(), 'frostfall-client.zip')
 
   // Fetch serverinfo once so writeClientSettings knows offline vs online mode.
-  let serverInfo = { offlineMode: true }
+  let serverInfo = null
   try { serverInfo = await fetchJSON(`${config.apiUrl}/api/serverinfo`) } catch {}
 
   const clientSettingsPath = path.join(
@@ -866,7 +866,9 @@ function writeClientSettings(destPath, srv, serverInfo) {
   settings['server-ip']   = srv.address
   settings['server-port'] = Number(srv.port)
 
-  const offlineMode = serverInfo?.offlineMode ?? true
+  // Default to false (online mode) when serverInfo is unavailable — safer
+  // than defaulting to offline, which would write a wrong profileId-based gameData.
+  const offlineMode = serverInfo?.offlineMode ?? false
 
   settings['master']            = serverInfo?.masterUrl || ''
   settings['server-master-key'] = serverInfo?.masterKey || null
