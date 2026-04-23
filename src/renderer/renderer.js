@@ -49,7 +49,6 @@ footerServerSelect.addEventListener('change', () => {
 
 // ── Vortex fields ─────────────────────────────────────────────────────────────
 const fieldVortexPath    = document.getElementById('setting-vortex-path')
-const fieldVortexProfile = document.getElementById('setting-vortex-profile')
 const fieldVortexEnabled = document.getElementById('setting-vortex-enabled')
 const vortexStatusDot    = document.getElementById('vortex-status-dot')
 const vortexStatusText   = document.getElementById('vortex-status-text')
@@ -120,7 +119,6 @@ async function loadSettings() {
   // Restore Vortex settings
   fieldVortexPath.value      = s.vortexPath || ''
   fieldVortexEnabled.checked = !!s.vortexEnabled
-  await refreshVortexProfiles(s.vortexProfileId || '')
   updateVortexStatus()
 
   return s
@@ -199,21 +197,10 @@ function renderTopbarDiscord() {
 renderTopbarDiscord()
 
 document.getElementById('btn-save').addEventListener('click', async () => {
-  const profileId = fieldVortexProfile.value.trim()
-
   const data = {
-    skyrimPath:      fieldSkyrimPath.value.trim(),
-    vortexPath:      fieldVortexPath.value.trim(),
-    vortexProfileId: profileId,
-    vortexEnabled:   fieldVortexEnabled.checked,
-  }
-
-  // Tag the profile with its display name so we can show it on future loads
-  if (profileId) {
-    const selectedOption = fieldVortexProfile.querySelector(`option[value="${profileId}"]`)
-    if (selectedOption) {
-      await window.electronAPI.vortexTagProfile(profileId, selectedOption.textContent)
-    }
+    skyrimPath:    fieldSkyrimPath.value.trim(),
+    vortexPath:    fieldVortexPath.value.trim(),
+    vortexEnabled: fieldVortexEnabled.checked,
   }
 
   await window.electronAPI.saveSettings(data)
@@ -232,56 +219,19 @@ document.getElementById('btn-browse').addEventListener('click', async () => {
 
 // ── Vortex UI ─────────────────────────────────────────────────────────────────
 
-const FROSTFALL_PROFILE_NAME = 'frostfall server collection'
-
-async function refreshVortexProfiles(selectId) {
-  const allProfiles = await window.electronAPI.vortexListProfiles()
-
-  // Only show profiles belonging to the Frostfall Server Collection
-  const profiles = allProfiles.filter(p =>
-    p.name.toLowerCase().includes(FROSTFALL_PROFILE_NAME)
-  )
-
-  // Preserve current selection if no explicit id given
-  const currentVal = selectId !== undefined ? selectId : fieldVortexProfile.value
-
-  fieldVortexProfile.innerHTML = profiles.length === 0
-    ? '<option value="">— no Frostfall Server Collection profile found —</option>'
-    : '<option value="">— select profile —</option>'
-
-  profiles.forEach(p => {
-    const opt = document.createElement('option')
-    opt.value       = p.id
-    opt.textContent = p.name !== p.id ? p.name : `Profile ${p.id.slice(0, 8)}…`
-    opt.selected    = p.id === currentVal
-    fieldVortexProfile.appendChild(opt)
-  })
-
-  // Auto-select if there is exactly one matching profile and none is saved yet
-  if (profiles.length === 1 && !currentVal) {
-    fieldVortexProfile.value = profiles[0].id
-  }
-}
-
 function updateVortexStatus() {
-  const hasExe     = fieldVortexPath.value.trim().length > 0
-  const hasProfile = fieldVortexProfile.value.trim().length > 0
-  const enabled    = fieldVortexEnabled.checked
+  const hasExe  = fieldVortexPath.value.trim().length > 0
+  const enabled = fieldVortexEnabled.checked
 
   if (!hasExe) {
-    vortexStatusDot.className  = 'vortex-status-dot'
+    vortexStatusDot.className    = 'vortex-status-dot'
     vortexStatusText.textContent = 'Vortex not configured'
-  } else if (!hasProfile) {
-    vortexStatusDot.className  = 'vortex-status-dot dot-warn'
-    vortexStatusText.textContent = 'Vortex found — no profile selected'
   } else if (!enabled) {
-    vortexStatusDot.className  = 'vortex-status-dot dot-warn'
+    vortexStatusDot.className    = 'vortex-status-dot dot-warn'
     vortexStatusText.textContent = 'Vortex configured — integration disabled'
   } else {
-    const selectedOpt = fieldVortexProfile.querySelector('option:checked')
-    const profileName = selectedOpt?.textContent || fieldVortexProfile.value
-    vortexStatusDot.className  = 'vortex-status-dot dot-ok'
-    vortexStatusText.textContent = `Active — profile: ${profileName}`
+    vortexStatusDot.className    = 'vortex-status-dot dot-ok'
+    vortexStatusText.textContent = 'Vortex active'
   }
 }
 
@@ -290,13 +240,7 @@ document.getElementById('btn-detect-vortex').addEventListener('click', async () 
   btn.disabled = true
   btn.textContent = 'Detecting…'
   const result = await window.electronAPI.vortexDetect()
-  if (result.found) {
-    fieldVortexPath.value = result.path
-    await refreshVortexProfiles()
-  } else {
-    fieldVortexPath.value = ''
-    fieldVortexProfile.innerHTML = '<option value="">No Vortex installation found</option>'
-  }
+  fieldVortexPath.value = result.found ? result.path : ''
   updateVortexStatus()
   btn.disabled = false
   btn.textContent = 'Auto-detect Vortex'
@@ -307,22 +251,11 @@ document.getElementById('btn-browse-vortex').addEventListener('click', async () 
   if (result) {
     const exePath = result.endsWith('.exe') ? result : result + '\\Vortex.exe'
     fieldVortexPath.value = exePath
-    await refreshVortexProfiles()
     updateVortexStatus()
   }
 })
 
-document.getElementById('btn-refresh-profiles').addEventListener('click', async () => {
-  await refreshVortexProfiles()
-  updateVortexStatus()
-})
-
-document.getElementById('btn-open-profiles').addEventListener('click', () => {
-  window.electronAPI.vortexOpenProfilesDir()
-})
-
 fieldVortexEnabled.addEventListener('change', updateVortexStatus)
-fieldVortexProfile.addEventListener('change', updateVortexStatus)
 
 // ── Install / Update Client Files ────────────────────────────────────────────
 const installStatusClient = document.getElementById('install-status-client')

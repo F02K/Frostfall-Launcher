@@ -47,7 +47,6 @@ const store = new Store({
     discordUser:       null,
     discordToken:      null,
     vortexPath:        '',
-    vortexProfileId:   '',
     vortexEnabled:     false,
     vortexStagingPath: '',   // empty = use Vortex default (%APPDATA%\Vortex\skyrimse\mods)
     nexusApiKey:       '',   // user's free Nexus API key — used to resolve file IDs for nxm:// links
@@ -134,7 +133,7 @@ ipcMain.handle('settings:load', async () => {
 })
 ipcMain.handle('settings:save', (_e, data) => {
   const allowed = ['skyrimPath', 'activeServerIndex',
-                   'vortexPath', 'vortexProfileId', 'vortexEnabled']
+                   'vortexPath', 'vortexEnabled']
   const clean = {}
   for (const k of allowed) if (k in data) clean[k] = data[k]
   store.set(clean)
@@ -316,49 +315,7 @@ ipcMain.handle('discord:login', async () => {
 
 ipcMain.handle('vortex:detect', () => {
   const found = vortex.findVortexExe()
-
-  // Auto-select the profile if only one exists and none is configured yet.
-  // readProfilesFromState() (async, needs LevelDB) is called separately via
-  // vortex:listProfiles, so we use the fast filesystem-only check here.
-  if (!store.get('vortexProfileId')) {
-    const auto = vortex.autoDetectProfile()
-    if (auto) store.set('vortexProfileId', auto.id)
-  }
-
   return { found: !!found, path: found || '' }
-})
-
-ipcMain.handle('vortex:listProfiles', async () => {
-  const { profiles, activeProfileId } = await vortex.readProfilesFromState()
-
-  // Auto-apply the profile Vortex considers active for skyrimse if the user
-  // hasn't picked one in the launcher yet.
-  if (activeProfileId && !store.get('vortexProfileId')) {
-    store.set('vortexProfileId', activeProfileId)
-  }
-
-  return profiles
-})
-
-ipcMain.handle('vortex:getStatus', () => {
-  const vortexPath = store.get('vortexPath')
-  const profileId  = store.get('vortexProfileId')
-  return vortex.getStatus(vortexPath, profileId)
-})
-
-ipcMain.handle('vortex:tagProfile', (_e, profileId, profileName) => {
-  try {
-    vortex.tagProfile(profileId, profileName)
-    return { success: true }
-  } catch (err) {
-    return { success: false, error: err.message }
-  }
-})
-
-ipcMain.on('vortex:openProfilesDir', () => {
-  const dir = vortex.getProfilesRoot()
-  if (fs.existsSync(dir)) shell.openPath(dir)
-  else shell.openPath(vortex.getDataPath())
 })
 
 // ── Metrics ───────────────────────────────────────────────────────────────────
@@ -410,19 +367,15 @@ const REQUIRED_FILES = [
 ]
 
 ipcMain.handle('launch:skse', async () => {
-  const skyrimPath      = store.get('skyrimPath')
-  const vortexEnabled   = store.get('vortexEnabled')
-  const vortexProfileId = store.get('vortexProfileId')
-  const vortexPath      = store.get('vortexPath')
+  const skyrimPath    = store.get('skyrimPath')
+  const vortexEnabled = store.get('vortexEnabled')
+  const vortexPath    = store.get('vortexPath')
 
   if (!skyrimPath) {
     return { success: false, error: 'Skyrim path not configured.' }
   }
 
   if (vortexEnabled) {
-    if (!vortexProfileId) {
-      return { success: false, error: 'No Vortex profile selected — open Settings and choose a profile.' }
-    }
     if (!vortexPath || !fs.existsSync(vortexPath)) {
       return { success: false, error: 'Vortex.exe not found — open Settings and re-detect Vortex.' }
     }
@@ -436,13 +389,10 @@ ipcMain.handle('launch:skse', async () => {
       log('[launch] client settings written')
     }
 
-    // Step 1: spawn Vortex with the profile ID — Vortex switches to that profile on
-    // startup which triggers an automatic mod deployment.  --start-minimized keeps it
-    // in the system tray so the user doesn't see a Vortex window mid-launch.
-    // (There is no Vortex CLI flag to deploy or launch a game; the profile switch is
-    //  the only supported way to trigger deployment from outside Vortex.)
-    log(`[launch] deploying via Vortex profile ${vortexProfileId}…`)
-    spawn(vortexPath, ['--profile', vortexProfileId, '--start-minimized'], {
+    // Step 1: start Vortex minimised so it is running and ready to deploy.
+    // The user manages their own collection/profile inside Vortex.
+    log('[launch] starting Vortex minimised…')
+    spawn(vortexPath, ['--start-minimized'], {
       detached: true,
       stdio: 'ignore',
     }).unref()
@@ -504,16 +454,15 @@ ipcMain.on('install:start', (_e, mode) => {
   if (installing) return
   installing = true
 
-  const vortexProfileId = store.get('vortexProfileId')
   let fn
   if (mode === 'client') {
     fn = runDirectInstall()
   } else if (mode === 'vortex') {
-    fn = runVortexInstall(vortexProfileId)
+    fn = runVortexInstall()
   } else {
     // Auto mode (used by the Play button) — delegate based on vortexEnabled setting
     const vortexEnabled = store.get('vortexEnabled')
-    fn = vortexEnabled ? runVortexInstall(vortexProfileId) : runDirectInstall()
+    fn = vortexEnabled ? runVortexInstall() : runDirectInstall()
   }
   fn.catch(err => {
     log('[install] Unhandled error:', err.message)
@@ -667,7 +616,7 @@ async function runDirectInstall() {
 
 // ── Vortex install ────────────────────────────────────────────────────────────
 
-async function runVortexInstall(profileId) {
+async function runVortexInstall() {
   const abort = (msg) => {
     log('[vortex-install] ABORT:', msg)
     send('install:complete', { success: false, error: msg })
@@ -676,7 +625,6 @@ async function runVortexInstall(profileId) {
 
   const skyrimPath = store.get('skyrimPath')
   if (!skyrimPath) return abort('Skyrim path not configured.')
-  if (!profileId)  return abort('No Vortex profile selected. Open Settings and choose a profile.')
 
   const srv = activeServer()
   if (!srv) return abort('No server selected — open Settings and choose a server.')

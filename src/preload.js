@@ -47,9 +47,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // Vortex integration
-  vortexDetect:        ()                      => ipcRenderer.invoke('vortex:detect'),
-  vortexListProfiles:  ()                      => ipcRenderer.invoke('vortex:listProfiles'),
-  vortexGetStatus:     ()                      => ipcRenderer.invoke('vortex:getStatus'),
-  vortexTagProfile:    (id, name)              => ipcRenderer.invoke('vortex:tagProfile', id, name),
-  vortexOpenProfilesDir: ()                    => ipcRenderer.send('vortex:openProfilesDir'),
+  vortexDetect: () => ipcRenderer.invoke('vortex:detect'),
 })
