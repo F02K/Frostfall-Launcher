@@ -380,7 +380,7 @@ const badgePlayers = document.getElementById('badge-players')
 
 async function checkServerStatus() {
   const data = await window.electronAPI.fetchStatus()
-  if (!data || !data.ok) {
+  if (!data || !data.ok || data.status !== 'online') {
     badgeStatus.classList.remove('online')
     badgeLabel.textContent = 'OFFLINE'
     badgePlayers.hidden = true
@@ -437,7 +437,16 @@ async function loadServerInfo() {
   // `allowed` is session-aware: false only when a session was sent and the
   // backend rejected it (locked/not whitelisted).  Without a session it
   // defaults to true — access is re-checked after Discord login.
-  if (info.allowed === false) serverAllowed = false
+  // `sessionValid: false` means the stored session expired — treat as logged out.
+  if (info.sessionValid === false && discordUser) {
+    // Session expired — clear stale auth so the user can log in again cleanly.
+    await window.electronAPI.discordLogout()
+    discordUser   = null
+    serverAllowed = true
+    renderTopbarDiscord()
+  } else if (info.allowed === false) {
+    serverAllowed = false
+  }
 
   updateLockState()
 
